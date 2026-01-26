@@ -1,6 +1,4 @@
-# Volchock C2 Client
-
-Client graphique pour Volchock C2.
+# XOR C2
 
 ## Documentation
 
@@ -16,11 +14,11 @@ Client graphique pour Volchock C2.
 
 ```bash
 # Compiler le client
-cd volchock-c2-client
+cd xor-c2-client
 cargo build --release
 
 # Compiler le serveur
-cd ../c2-volchock
+cd ../c2-xor-server
 cargo build --release
 ```
 
@@ -29,17 +27,17 @@ cargo build --release
 ### 1. Lancer le serveur
 
 ```bash
-cd c2-volchock
+cd c2-xor-server
 cargo run
 # Ou avec le binaire
-./target/release/c2-volchock
+./target/release/xor-c2-server
 ```
 
 ### 2. Lancer le client
 
 ```bash
-cd volchock-c2-client
+cd xor-c2-client
 cargo run
 # Ou avec le binaire
-./target/release/volchock-c2-client
+./target/release/xor-c2-client
 ```
