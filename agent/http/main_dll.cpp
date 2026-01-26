@@ -1,4 +1,3 @@
-// Compile with: x86_64-w64-mingw32-g++ -shared -o agent.dll main_dll.cpp base64.cpp crypt.cpp system_utils.cpp file_utils.cpp http_client.cpp task.cpp pe-exec.cpp persistence.cpp -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 #include <windows.h>
 #include <iostream>
 #include <thread>
