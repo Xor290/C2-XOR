@@ -48,7 +48,7 @@ Exécutable Windows standard (.exe)
 | Format | PE64 (x86_64) |
 | Compilateur | x86_64-w64-mingw32-g++ |
 | Taille moyenne | ~100 KB |
-| Persistance | Non incluse (à implémenter) |
+| Persistance | Automatique (Registry Run Key) |
 
 ### 2. Windows DLL
 Bibliothèque dynamique pour injection
@@ -58,6 +58,7 @@ Bibliothèque dynamique pour injection
 | Format | PE64 DLL |
 | Point d'entrée | DllMain |
 | Usage | Injection réflective, side-loading |
+| Persistance | Automatique (Registry Run Key) |
 
 ### 3. Shellcode
 Code binaire brut pour injection mémoire
@@ -251,6 +252,7 @@ stateDiagram-v2
 - Chargement de la configuration
 - Initialisation des modules réseau
 - Vérification anti-VM (si activé)
+- **Installation de la persistance automatique** (si pas déjà installée)
 
 ### 2. Collecte d'informations
 L'agent collecte automatiquement :
@@ -472,6 +474,61 @@ flowchart TB
 
 ---
 
+## Persistance Automatique (MITRE T1547.001)
+
+L'agent installe automatiquement une persistance au premier lancement via la technique **Registry Run Keys** (MITRE ATT&CK T1547.001).
+
+### Mécanisme
+
+```mermaid
+flowchart TD
+    A[Démarrage Agent] --> B{Persistance installée?}
+    B -->|Oui| C[Continuer exécution]
+    B -->|Non| D[Copier EXE vers AppData]
+    D --> E[Ajouter clé Registry Run]
+    E --> F{Succès?}
+    F -->|Oui| C
+    F -->|Non| G[Log erreur]
+    G --> C
+```
+
+### Détails techniques
+
+| Élément | Valeur |
+|---------|--------|
+| Clé Registry | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
+| Nom de la valeur | `WindowsSecurityHealth` |
+| Emplacement EXE | `%APPDATA%\Microsoft\Security\SecurityHealthService.exe` |
+| Privilèges requis | Aucun (HKCU = user-level) |
+| Attributs fichier | Hidden, System |
+
+### Comportement
+
+1. **Premier lancement** :
+   - Vérifie si la persistance existe déjà
+   - Copie l'exécutable vers `%APPDATA%\Microsoft\Security\`
+   - Crée la clé registry pointant vers l'exécutable copié
+   - Marque les fichiers comme cachés
+
+2. **Lancements suivants** :
+   - Détecte que la persistance est déjà en place
+   - Continue l'exécution normale
+
+3. **Après redémarrage** :
+   - Windows exécute automatiquement l'agent via la clé Run
+   - L'agent démarre depuis l'emplacement persistant
+
+### Fichiers concernés
+
+| Fichier | Rôle |
+|---------|------|
+| `persistence.h` | Déclarations des fonctions |
+| `persistence.cpp` | Implémentation de la persistance |
+| `main_exe.cpp` | Appel automatique au démarrage |
+| `main_dll.cpp` | Appel automatique au démarrage |
+
+---
+
 ## Communication Chiffrée
 
 ### Protocole de chiffrement
@@ -525,6 +582,8 @@ agent/
 │   ├── task.h
 │   ├── pe-exec.cpp           # Exécution PE en mémoire
 │   ├── pe-exec.h
+│   ├── persistence.cpp       # Persistance automatique (T1547.001)
+│   ├── persistence.h
 │   ├── base64.cpp            # Encodage Base64
 │   ├── base64.h
 │   ├── json.hpp              # Parser JSON (nlohmann)

