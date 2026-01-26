@@ -168,53 +168,56 @@ jobs:
                   unzip -q yara-community.zip -d yara-rules/
 
             - name: ClamAV Scan
-              id: clamav
               continue-on-error: true
               run: |
                   echo "=== ClamAV Scan Results ===" | tee clamav-results.txt
                   clamscan --infected --recursive artifacts/ | tee -a clamav-results.txt
-                  INFECTED=$(grep -c "FOUND" clamav-results.txt || echo "0")
-                  echo "clamav_detections=$INFECTED" >> $GITHUB_OUTPUT
-                  echo "ClamAV detections: $INFECTED"
+                  INFECTED=$(grep -c "FOUND" clamav-results.txt || true)
+                  echo "ClamAV detections: ${INFECTED:-0}"
+                  echo "${INFECTED:-0}" > clamav-count.txt
 
             - name: YARA Scan - Signature Base
-              id: yara_sigbase
               continue-on-error: true
               run: |
                   echo "=== YARA Signature-Base Scan ===" | tee yara-sigbase-results.txt
-                  find yara-rules/signature-base-master/yara -name "*.yar" -type f | head -50 | while read rule; do
-                    yara -r "$rule" artifacts/ 2>/dev/null | tee -a yara-sigbase-results.txt || true
-                  done
-                  MATCHES=$(grep -c "artifacts/" yara-sigbase-results.txt || echo "0")
-                  echo "yara_sigbase_detections=$MATCHES" >> $GITHUB_OUTPUT
-                  echo "YARA Signature-Base matches: $MATCHES"
+                  find yara-rules/signature-base-master/yara -name "*.yar" -type f 2>/dev/null | head -50 > /tmp/rules.txt
+                  while IFS= read -r rule; do
+                    yara -r "$rule" artifacts/ 2>/dev/null >> yara-sigbase-results.txt || true
+                  done < /tmp/rules.txt
+                  MATCHES=$(grep -c "artifacts/" yara-sigbase-results.txt || true)
+                  echo "YARA Signature-Base matches: ${MATCHES:-0}"
+                  echo "${MATCHES:-0}" > yara-sigbase-count.txt
 
             - name: YARA Scan - Community Rules
-              id: yara_community
               continue-on-error: true
               run: |
                   echo "=== YARA Community Rules Scan ===" | tee yara-community-results.txt
                   for category in malware packers exploits; do
                     if [ -d "yara-rules/rules-master/$category" ]; then
-                      find "yara-rules/rules-master/$category" -name "*.yar" -type f | while read rule; do
-                        yara -r "$rule" artifacts/ 2>/dev/null | tee -a yara-community-results.txt || true
-                      done
+                      find "yara-rules/rules-master/$category" -name "*.yar" -type f 2>/dev/null > /tmp/rules-$category.txt
+                      while IFS= read -r rule; do
+                        yara -r "$rule" artifacts/ 2>/dev/null >> yara-community-results.txt || true
+                      done < /tmp/rules-$category.txt
                     fi
                   done
-                  MATCHES=$(grep -c "artifacts/" yara-community-results.txt || echo "0")
-                  echo "yara_community_detections=$MATCHES" >> $GITHUB_OUTPUT
-                  echo "YARA Community matches: $MATCHES"
+                  MATCHES=$(grep -c "artifacts/" yara-community-results.txt || true)
+                  echo "YARA Community matches: ${MATCHES:-0}"
+                  echo "${MATCHES:-0}" > yara-community-count.txt
 
             - name: Generate Detection Report
               run: |
+                  CLAMAV_COUNT=$(cat clamav-count.txt 2>/dev/null || echo "0")
+                  SIGBASE_COUNT=$(cat yara-sigbase-count.txt 2>/dev/null || echo "0")
+                  COMMUNITY_COUNT=$(cat yara-community-count.txt 2>/dev/null || echo "0")
+
                   echo "# Antivirus Detection Report" > av-report.md
                   echo "" >> av-report.md
                   echo "## Summary" >> av-report.md
                   echo "| Scanner | Detections |" >> av-report.md
                   echo "|---------|------------|" >> av-report.md
-                  echo "| ClamAV | ${{ steps.clamav.outputs.clamav_detections || '0' }} |" >> av-report.md
-                  echo "| YARA Signature-Base | ${{ steps.yara_sigbase.outputs.yara_sigbase_detections || '0' }} |" >> av-report.md
-                  echo "| YARA Community | ${{ steps.yara_community.outputs.yara_community_detections || '0' }} |" >> av-report.md
+                  echo "| ClamAV | $CLAMAV_COUNT |" >> av-report.md
+                  echo "| YARA Signature-Base | $SIGBASE_COUNT |" >> av-report.md
+                  echo "| YARA Community | $COMMUNITY_COUNT |" >> av-report.md
                   echo "" >> av-report.md
                   echo "## ClamAV Details" >> av-report.md
                   echo '```' >> av-report.md
