@@ -130,3 +130,117 @@ jobs:
                       agent/http/agent.dll
                       agent/http/shellcode.bin
                   retention-days: 7
+
+    antivirus-scan:
+        name: Antivirus Detection Test
+        runs-on: ubuntu-latest
+        needs: build-windows-agent
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Download build artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: agents-bundle
+                  path: artifacts/
+
+            - name: Install ClamAV
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y clamav clamav-daemon
+                  sudo systemctl stop clamav-freshclam || true
+                  sudo freshclam || true
+
+            - name: Install YARA
+              run: |
+                  sudo apt-get install -y yara
+
+            - name: Download YARA rules
+              run: |
+                  mkdir -p yara-rules
+                  # Signature-Base rules (Neo23x0)
+                  curl -sL https://github.com/Neo23x0/signature-base/archive/refs/heads/master.zip -o sig-base.zip
+                  unzip -q sig-base.zip -d yara-rules/
+                  # YARA-Rules community
+                  curl -sL https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip -o yara-community.zip
+                  unzip -q yara-community.zip -d yara-rules/
+
+            - name: ClamAV Scan
+              id: clamav
+              continue-on-error: true
+              run: |
+                  echo "=== ClamAV Scan Results ===" | tee clamav-results.txt
+                  clamscan --infected --recursive artifacts/ | tee -a clamav-results.txt
+                  INFECTED=$(grep -c "FOUND" clamav-results.txt || echo "0")
+                  echo "clamav_detections=$INFECTED" >> $GITHUB_OUTPUT
+                  echo "ClamAV detections: $INFECTED"
+
+            - name: YARA Scan - Signature Base
+              id: yara_sigbase
+              continue-on-error: true
+              run: |
+                  echo "=== YARA Signature-Base Scan ===" | tee yara-sigbase-results.txt
+                  find yara-rules/signature-base-master/yara -name "*.yar" -type f | head -50 | while read rule; do
+                    yara -r "$rule" artifacts/ 2>/dev/null | tee -a yara-sigbase-results.txt || true
+                  done
+                  MATCHES=$(grep -c "artifacts/" yara-sigbase-results.txt || echo "0")
+                  echo "yara_sigbase_detections=$MATCHES" >> $GITHUB_OUTPUT
+                  echo "YARA Signature-Base matches: $MATCHES"
+
+            - name: YARA Scan - Community Rules
+              id: yara_community
+              continue-on-error: true
+              run: |
+                  echo "=== YARA Community Rules Scan ===" | tee yara-community-results.txt
+                  for category in malware packers exploits; do
+                    if [ -d "yara-rules/rules-master/$category" ]; then
+                      find "yara-rules/rules-master/$category" -name "*.yar" -type f | while read rule; do
+                        yara -r "$rule" artifacts/ 2>/dev/null | tee -a yara-community-results.txt || true
+                      done
+                    fi
+                  done
+                  MATCHES=$(grep -c "artifacts/" yara-community-results.txt || echo "0")
+                  echo "yara_community_detections=$MATCHES" >> $GITHUB_OUTPUT
+                  echo "YARA Community matches: $MATCHES"
+
+            - name: Generate Detection Report
+              run: |
+                  echo "# Antivirus Detection Report" > av-report.md
+                  echo "" >> av-report.md
+                  echo "## Summary" >> av-report.md
+                  echo "| Scanner | Detections |" >> av-report.md
+                  echo "|---------|------------|" >> av-report.md
+                  echo "| ClamAV | ${{ steps.clamav.outputs.clamav_detections || '0' }} |" >> av-report.md
+                  echo "| YARA Signature-Base | ${{ steps.yara_sigbase.outputs.yara_sigbase_detections || '0' }} |" >> av-report.md
+                  echo "| YARA Community | ${{ steps.yara_community.outputs.yara_community_detections || '0' }} |" >> av-report.md
+                  echo "" >> av-report.md
+                  echo "## ClamAV Details" >> av-report.md
+                  echo '```' >> av-report.md
+                  cat clamav-results.txt >> av-report.md
+                  echo '```' >> av-report.md
+                  echo "" >> av-report.md
+                  echo "## YARA Signature-Base Details" >> av-report.md
+                  echo '```' >> av-report.md
+                  cat yara-sigbase-results.txt >> av-report.md
+                  echo '```' >> av-report.md
+                  echo "" >> av-report.md
+                  echo "## YARA Community Details" >> av-report.md
+                  echo '```' >> av-report.md
+                  cat yara-community-results.txt >> av-report.md
+                  echo '```' >> av-report.md
+
+                  echo "=== Detection Report ==="
+                  cat av-report.md
+
+            - name: Upload AV Report
+              uses: actions/upload-artifact@v4
+              with:
+                  name: antivirus-report
+                  path: |
+                      av-report.md
+                      clamav-results.txt
+                      yara-sigbase-results.txt
+                      yara-community-results.txt
+                  retention-days: 7
