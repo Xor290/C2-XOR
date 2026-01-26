@@ -41,3 +41,7 @@ cargo run
 # Ou avec le binaire
 ./target/release/xor-c2-client
 ```
+
+# Disclaimer
+
+This project is for educational purposes only. Use it responsibly and ethically.
