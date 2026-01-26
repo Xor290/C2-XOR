@@ -1,0 +1,132 @@
+name: Build Agents
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/build-agents.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/build-agents.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows-agent:
+    name: Build Windows Agent
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 mingw-w64-x86-64-dev
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install pefile
+
+      - name: Create test config.h
+        working-directory: agent/http
+        run: |
+          cat > config.h << 'EOF'
+          #ifndef CONFIG_H
+          #define CONFIG_H
+
+          constexpr char XOR_KEY[] = "TESTKEY123";
+          constexpr char XOR_SERVERS[] = "127.0.0.1";
+          constexpr int XOR_PORT = 8080;
+          constexpr char USER_AGENT[] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+          constexpr char HEADER[] = "X-Request-ID";
+          constexpr char RESULTS_PATH[] = "/api/results";
+          constexpr int BEACON_INTERVAL = 60;
+          constexpr bool ANTI_VM_ENABLED = false;
+
+          #endif
+          EOF
+
+      - name: Build EXE agent
+        working-directory: agent/http
+        run: |
+          x86_64-w64-mingw32-g++ \
+            -o agent.exe \
+            main_exe.cpp \
+            base64.cpp \
+            crypt.cpp \
+            system_utils.cpp \
+            file_utils.cpp \
+            http_client.cpp \
+            task.cpp \
+            pe-exec.cpp \
+            -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32
+
+      - name: Build DLL agent
+        working-directory: agent/http
+        run: |
+          x86_64-w64-mingw32-g++ \
+            -shared \
+            -o agent.dll \
+            main_dll.cpp \
+            base64.cpp \
+            crypt.cpp \
+            system_utils.cpp \
+            file_utils.cpp \
+            http_client.cpp \
+            task.cpp \
+            pe-exec.cpp \
+            -lwininet -lpsapi -lshlwapi -static-libstdc++ -static-libgcc -lws2_32
+
+      - name: Generate Shellcode
+        working-directory: agent/http/ReflectiveLoader
+        run: |
+          cp ../agent.dll .
+          python shellcodize.py
+          mv shellcode.bin ../
+
+      - name: Verify build artifacts
+        working-directory: agent/http
+        run: |
+          echo "=== Build Artifacts ==="
+          ls -lh agent.exe agent.dll shellcode.bin
+          file agent.exe
+          file agent.dll
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-exe
+          path: agent/http/agent.exe
+          retention-days: 7
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-dll
+          path: agent/http/agent.dll
+          retention-days: 7
+
+      - name: Upload Shellcode artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-shellcode
+          path: agent/http/shellcode.bin
+          retention-days: 7
+
+      - name: Upload all artifacts (bundle)
+        uses: actions/upload-artifact@v4
+        with:
+          name: agents-bundle
+          path: |
+            agent/http/agent.exe
+            agent/http/agent.dll
+            agent/http/shellcode.bin
+          retention-days: 7
