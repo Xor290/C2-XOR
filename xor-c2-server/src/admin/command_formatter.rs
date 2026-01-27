@@ -1,4 +1,3 @@
-// src/admin/command_formatter.rs
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::fs;
 use std::path::Path;
@@ -78,7 +77,6 @@ impl CommandFormatter {
             return Err("No executable specified for pe-exec".to_string());
         }
 
-        // Séparer le chemin du PE et les arguments
         let parts: Vec<&str> = rest.splitn(2, ' ').collect();
         let pe_path = parts[0];
 
@@ -90,7 +88,6 @@ impl CommandFormatter {
         let pe_content =
             fs::read(pe_path).map_err(|e| format!("Failed to read executable: {}", e))?;
 
-        // Vérification PE (MZ)
         if pe_content.len() < 2 || &pe_content[0..2] != b"MZ" {
             return Err(format!(
                 "File '{}' is not a valid PE executable (missing MZ signature)",
@@ -98,7 +95,6 @@ impl CommandFormatter {
             ));
         }
 
-        // Extraire le nom du fichier (sans le chemin)
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -110,15 +106,9 @@ impl CommandFormatter {
             pe_content.len()
         );
 
-        // ✅ On stocke le NOM DU PE dans la commande
         Ok(format!("'pe-exec':'{}'", filename))
     }
 
-    /// Prépare les données PE-exec pour stockage dans la DB
-    ///
-    /// Cette fonction est appelée APRÈS format_pe_exec() pour extraire
-    /// et encoder les données du PE et ses arguments
-    // src/admin/command_formatter.rs
     pub fn prepare_pe_exec_data(input: &str) -> Result<String, String> {
         let rest = input
             .strip_prefix("/pe-exec ")
@@ -143,13 +133,10 @@ impl CommandFormatter {
         let pe_content =
             fs::read(pe_path).map_err(|e| format!("Failed to read executable: {}", e))?;
 
-        // Encoder le PE en base64
         let pe_b64 = STANDARD.encode(&pe_content);
 
-        // Encoder les arguments en base64
         let args_b64 = STANDARD.encode(args.as_bytes());
 
-        // ✅ CRÉER LE JSON DIRECTEMENT (pas d'encodage base64 supplémentaire)
         let json_data = format!("{{'content':'{}','args':'{}'}}", pe_b64, args_b64);
 
         log::info!(
@@ -158,7 +145,6 @@ impl CommandFormatter {
             json_data.len()
         );
 
-        // ✅ RETOURNER LE JSON DIRECTEMENT (sera chiffré XOR puis base64 par le listener)
         Ok(json_data)
     }
 }

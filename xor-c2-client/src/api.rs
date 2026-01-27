@@ -1,6 +1,5 @@
 use crate::models;
 use crate::models::*;
-use crate::state;
 use base64;
 use encoding_rs;
 use std::time::Duration;
@@ -253,7 +252,6 @@ impl ApiClient {
                 }
             }
 
-            // ✅ Pour les uploads, juste décoder et afficher le message de confirmation
             let content = if is_upload_confirmation {
                 println!("✅ Confirmation d'upload détectée");
                 Self::decode_base64_if_needed(&raw_content)
@@ -397,7 +395,7 @@ impl ApiClient {
         let response = client
             .get(&url)
             .bearer_auth(token)
-            .timeout(Duration::from_secs(30)) // ✅ Timeout plus long pour les gros fichiers
+            .timeout(Duration::from_secs(30))
             .send()
             .await
             .map_err(|e| format!("Request error: {}", e))?;
@@ -411,7 +409,6 @@ impl ApiClient {
             return Err(format!("Download failed ({}) - {}", status, error_body));
         }
 
-        // ✅ FIX 2: Extraction correcte du filename (SANS urlencoding)
         let filename = response
             .headers()
             .get(reqwest::header::CONTENT_DISPOSITION)
@@ -444,7 +441,6 @@ impl ApiClient {
 
         println!("📦 File size: {} bytes", bytes.len());
 
-        // ✅ FIX 3: Créer le dossier de destination
         fs::create_dir_all(save_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
         let path = Path::new(save_dir).join(&filename);
 

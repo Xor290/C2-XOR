@@ -8,7 +8,6 @@ pub struct GeneratedCertificate {
 pub fn generate_self_signed_cert(
     subject_alt_names: Vec<String>,
 ) -> Result<GeneratedCertificate, String> {
-    // Generate self-signed certificate with the given SANs
     let cert = generate_simple_self_signed(subject_alt_names)
         .map_err(|e| format!("Failed to generate certificate: {}", e))?;
 
@@ -33,7 +32,6 @@ pub fn generate_cert_for_listener(
         "127.0.0.1".to_string(),
     ];
 
-    // Add the listener IP if it's not already included
     if listener_ip != "127.0.0.1" && listener_ip != "0.0.0.0" && listener_ip != "localhost" {
         subject_alt_names.push(listener_ip.to_string());
     }

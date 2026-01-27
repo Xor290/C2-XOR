@@ -2,7 +2,7 @@ use crate::admin::models::*;
 use bcrypt::{hash, DEFAULT_COST};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Result as SqlResult};
-use std::{collections::HashMap, string};
+use std::collections::HashMap;
 pub struct Database {
     path: String,
 }
@@ -571,11 +571,6 @@ impl Database {
         rows.collect()
     }
 
-    // ==========================================
-    // NOUVELLES MÉTHODES POUR COMMANDS
-    // ==========================================
-
-    /// Ajouter une commande pour un agent
     pub fn add_command(&self, agent_id: &str, command: &str) -> SqlResult<i64> {
         let conn = Connection::open(&self.path)?;
         conn.execute(
@@ -592,7 +587,6 @@ impl Database {
         Ok(command_id)
     }
 
-    /// Récupérer les commandes en attente pour un agent
     pub fn get_pending_commands(&self, agent_id: &str) -> SqlResult<Vec<(i64, String)>> {
         let conn = Connection::open(&self.path)?;
         let mut stmt = conn.prepare(
@@ -608,7 +602,6 @@ impl Database {
         Ok(commands)
     }
 
-    /// Marquer une commande comme envoyée
     pub fn mark_command_sent(&self, command_id: i64) -> SqlResult<()> {
         let conn = Connection::open(&self.path)?;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -620,7 +613,6 @@ impl Database {
         Ok(())
     }
 
-    /// Marquer une commande comme complétée
     pub fn mark_command_completed(&self, command_id: i64) -> SqlResult<()> {
         let conn = Connection::open(&self.path)?;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -632,7 +624,6 @@ impl Database {
         Ok(())
     }
 
-    /// Marquer une commande comme échouée
     pub fn mark_command_failed(&self, command_id: i64) -> SqlResult<()> {
         let conn = Connection::open(&self.path)?;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -644,7 +635,6 @@ impl Database {
         Ok(())
     }
 
-    /// Stocker un résultat de commande (stockage en Base64 direct)
     pub fn store_result(
         &self,
         agent_id: &str,
@@ -655,9 +645,8 @@ impl Database {
     ) -> SqlResult<i64> {
         let conn = Connection::open(&self.path)?;
 
-        let result_type = result_type.unwrap_or("text"); // si rien, c'est un texte
+        let result_type = result_type.unwrap_or("text");
 
-        // ===== NOUVEAU: Extraire le nom de fichier si c'est une commande download =====
         let mut filename: Option<String> = None;
 
         if let Some(cmd_id) = command_id {
@@ -697,12 +686,9 @@ impl Database {
         Ok(result_id)
     }
 
-    // ===== NOUVELLE FONCTION: Extraire le nom de fichier d'une commande =====
     pub fn extract_filename_from_command(command: &str) -> Option<String> {
-        // Format attendu: 'download':'filename.ext' ou 'upload':'filename.ext'
         let trimmed = command.trim().trim_matches(|c| c == '{' || c == '}');
 
-        // Vérifier si c'est une commande download/upload
         if !trimmed.contains("download") && !trimmed.contains("upload") {
             return None;
         }
@@ -711,7 +697,6 @@ impl Database {
 
         let after_colon = &trimmed[colon_pos + 1..].trim();
 
-        // Enlever les quotes
         let filename = after_colon
             .trim_matches(|c| c == '\'' || c == '"' || c == ' ')
             .to_string();

