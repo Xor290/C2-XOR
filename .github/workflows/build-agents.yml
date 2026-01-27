@@ -50,6 +50,7 @@ jobs:
                   constexpr char RESULTS_PATH[] = "/api/results";
                   constexpr int BEACON_INTERVAL = 60;
                   constexpr bool ANTI_VM_ENABLED = false;
+                  constexpr bool USE_HTTPS = false;
 
                   #endif
                   EOF
