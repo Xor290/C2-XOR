@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-// Configuration générée depuis le listener: default
+// Configuration générée depuis le listener: defaults
 constexpr char XOR_KEY[] = "mysupersecretkey";
 constexpr char XOR_SERVERS[] = "172.20.167.237";
 constexpr int XOR_PORT = 443;

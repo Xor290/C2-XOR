@@ -94,7 +94,9 @@ sequenceDiagram
 |-----------|-------------|
 | Langage | Rust |
 | Admin API | Actix-web |
-| Listener HTTP | Axum |
+| Listener HTTP/HTTPS | Axum + axum-server |
+| TLS/SSL | Rustls |
+| Certificats | rcgen (auto-génération) |
 | Base de données | SQLite |
 | Authentification | JWT (jsonwebtoken) |
 | Hash mots de passe | bcrypt |
@@ -426,31 +428,83 @@ Détails d'une victime spécifique.
 ### Gestion des Listeners
 
 #### POST /api/add/listener
-Crée un nouveau listener HTTP.
+Crée un nouveau listener HTTP ou HTTPS.
 
 **Authentification** : Bearer Token
 
-**Requête** :
+**Requête HTTP** :
+```json
+{
+  "listener_name": "http_listener",
+  "listener_type": "http",
+  "listener_ip": "0.0.0.0",
+  "listener_port": 8080,
+  "xor_key": "encryption_key_here",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  "uri_paths": "/api/beacon",
+  "headers": [["Accept", "application/json"]],
+  "tls_cert": "",
+  "tls_key": "",
+  "tls_cert_chain": ""
+}
+```
+
+**Requête HTTPS (avec auto-génération certificat)** :
 ```json
 {
   "listener_name": "https_listener",
-  "listener_type": "http",
+  "listener_type": "https",
   "listener_ip": "0.0.0.0",
   "listener_port": 443,
   "xor_key": "encryption_key_here",
   "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
   "uri_paths": "/api/beacon",
-  "headers": [["Accept", "application/json"]]
+  "headers": [["Accept", "application/json"]],
+  "tls_cert": "",
+  "tls_key": "",
+  "tls_cert_chain": ""
 }
 ```
 
-**Réponse** :
+**Requête HTTPS (avec certificat custom)** :
+```json
+{
+  "listener_name": "https_custom",
+  "listener_type": "https",
+  "listener_ip": "0.0.0.0",
+  "listener_port": 443,
+  "xor_key": "encryption_key_here",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  "uri_paths": "/api/beacon",
+  "headers": [["Accept", "application/json"]],
+  "tls_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
+  "tls_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+  "tls_cert_chain": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+}
+```
+
+**Réponse HTTP** :
 ```json
 {
   "success": true,
-  "message": "Listener 'https_listener' created successfully"
+  "message": "HTTP Listener 'http_listener' added successfully. Restart server to activate."
 }
 ```
+
+**Réponse HTTPS (auto-génération)** :
+```json
+{
+  "success": true,
+  "message": "HTTPS Listener 'https_listener' added successfully (self-signed certificate auto-generated). Restart server to activate.",
+  "cert_auto_generated": true
+}
+```
+
+**Note** : Pour les listeners HTTPS, si `tls_cert` et `tls_key` sont vides, un certificat self-signed est automatiquement généré avec les SANs suivants :
+- `{listener_name}.xor-c2.local` (CN)
+- `localhost`
+- `127.0.0.1`
+- L'IP du listener (si différente de 0.0.0.0/127.0.0.1)
 
 ---
 
@@ -611,6 +665,9 @@ erDiagram
         string user_agent
         string uri_paths
         text http_headers
+        text tls_cert
+        text tls_key
+        text tls_cert_chain
         datetime created_at
     }
 
@@ -710,30 +767,35 @@ fn xor_transform(data: &[u8], key: &str) -> Vec<u8> {
 ## Structure des Dossiers
 
 ```
-c2-xor/
+xor-c2-server/
 ├── config/
-│   └── config.json           # Configuration serveur
+│   └── config.json              # Configuration serveur
 ├── src/
-│   ├── main.rs               # Point d'entrée
+│   ├── main.rs                  # Point d'entrée
 │   ├── admin/
-│   │   ├── routes.rs         # Endpoints API
-│   │   ├── auth.rs           # Gestion JWT
-│   │   ├── db.rs             # Opérations SQLite
-│   │   ├── models.rs         # DTOs requête/réponse
-│   │   ├── command_formatter.rs  # Formatage commandes
-│   │   └── error.rs          # Gestion erreurs
+│   │   ├── mod.rs               # Module admin
+│   │   ├── routes.rs            # Endpoints API REST
+│   │   ├── auth.rs              # Gestion JWT
+│   │   ├── db.rs                # Opérations SQLite
+│   │   ├── models.rs            # DTOs requête/réponse
+│   │   ├── command_formatter.rs # Formatage commandes
+│   │   ├── cert_generator.rs    # Génération certificats TLS
+│   │   └── error.rs             # Gestion erreurs
 │   ├── agents/
-│   │   └── agent_handler.rs  # Cycle de vie agents
+│   │   └── agent_handler.rs     # Cycle de vie agents + compilation
 │   ├── listener/
-│   │   ├── http_listener.rs  # Listener Axum
-│   │   └── profile.rs        # Configuration listener
+│   │   ├── mod.rs               # Module listener
+│   │   ├── http_listener.rs     # Listener HTTP/HTTPS (Axum)
+│   │   └── profile.rs           # Configuration listener
 │   ├── encryption/
-│   │   └── xor_cipher.rs     # Implémentation XOR
-│   └── config.rs             # Chargement configuration
-├── downloads/                # Fichiers téléchargés
-├── agents_results/           # Agents générés
+│   │   ├── mod.rs               # Module encryption
+│   │   └── xor_cipher.rs        # Implémentation XOR
+│   └── config.rs                # Chargement configuration
+├── downloads/                   # Fichiers téléchargés depuis agents
+├── agents_results/              # Agents générés (exe, dll)
+├── temp_uploads/                # Fichiers temporaires pour upload
 ├── Cargo.toml
-└── xor_c2.db           # Base SQLite
+└── xor_c2.db                    # Base SQLite
 ```
 
 ---
@@ -746,9 +808,11 @@ c2-xor/
 - Hash bcrypt pour les mots de passe
 - Validation User-Agent sur les listeners
 - Vérification signature PE (header MZ)
+- Support HTTPS natif avec Rustls
+- Auto-génération de certificats self-signed
 
 ### Points d'attention
 - XOR seul est cryptographiquement faible (à renforcer pour production)
 - Credentials par défaut (`admin/admin123`) à changer impérativement
-- Pas de HTTPS natif (utiliser reverse proxy nginx/caddy)
 - SQLite limite la concurrence (considérer PostgreSQL pour scale)
+- Les certificats self-signed générés automatiquement ne sont pas fiables pour la production

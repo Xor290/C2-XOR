@@ -23,18 +23,14 @@ impl fmt::Display for ServerError {
 impl ResponseError for ServerError {
     fn error_response(&self) -> HttpResponse {
         match self {
-            ServerError::DatabaseError(_) => HttpResponse::InternalServerError().json(
-                serde_json::json!({"success": false, "message": self.to_string()})
-            ),
-            ServerError::AuthenticationError(_) => HttpResponse::Unauthorized().json(
-                serde_json::json!({"success": false, "message": self.to_string()})
-            ),
-            ServerError::ValidationError(_) => HttpResponse::BadRequest().json(
-                serde_json::json!({"success": false, "message": self.to_string()})
-            ),
-            ServerError::InternalError(_) => HttpResponse::InternalServerError().json(
-                serde_json::json!({"success": false, "message": self.to_string()})
-            ),
+            ServerError::DatabaseError(_) => HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "message": self.to_string()})),
+            ServerError::AuthenticationError(_) => HttpResponse::Unauthorized()
+                .json(serde_json::json!({"success": false, "message": self.to_string()})),
+            ServerError::ValidationError(_) => HttpResponse::BadRequest()
+                .json(serde_json::json!({"success": false, "message": self.to_string()})),
+            ServerError::InternalError(_) => HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "message": self.to_string()})),
         }
     }
 }

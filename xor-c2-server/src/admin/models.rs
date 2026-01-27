@@ -132,15 +132,6 @@ pub struct VictimAgentDetails {
     pub last_seen: String,
 }
 
-#[derive(Deserialize)]
-pub struct BeaconPayload {
-    pub agent_id: String,
-    pub hostname: String,
-    pub username: String,
-    pub process_name: String,
-    pub results: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultDetail {
     pub id: i64,

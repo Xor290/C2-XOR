@@ -651,7 +651,6 @@ impl Database {
 
         if let Some(cmd_id) = command_id {
             if let Ok(Some(cmd_str)) = self.get_command_by_id(cmd_id) {
-                // Le get_command_by_id retourne maintenant la commande complète
                 if let Some(parsed_filename) = Self::extract_filename_from_command(&cmd_str) {
                     filename = Some(parsed_filename);
                     log::info!(

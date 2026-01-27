@@ -58,7 +58,7 @@ Bibliothèque dynamique pour injection
 | Format | PE64 DLL |
 | Point d'entrée | DllMain |
 | Usage | Injection réflective, side-loading |
-| Persistance | Automatique (Registry Run Key) |
+| Export | `agent_run()` |
 
 ### 3. Shellcode
 Code binaire brut pour injection mémoire
@@ -67,6 +67,18 @@ Code binaire brut pour injection mémoire
 |-----------------|--------|
 | Format | Raw binary |
 | Usage | Process injection, BOF |
+| Génération | Via ReflectiveLoader (DLL → Shellcode) |
+
+### 4. Windows Service
+Agent en tant que service Windows
+
+| Caractéristique | Valeur |
+|-----------------|--------|
+| Format | PE64 EXE |
+| Nom du service | `XorService` |
+| Nom affiché | `Xor Service` |
+| Installation | `agent.exe install` |
+| Désinstallation | `agent.exe uninstall` |
 
 ---
 
@@ -181,13 +193,32 @@ constexpr int BEACON_INTERVAL = 60;
 constexpr bool ANTI_VM_ENABLED = true;
 ```
 
-**Vérifications effectuées** :
-- Détection VMware (vmtoolsd.exe, vmwaretray.exe)
-- Détection VirtualBox (VBoxService.exe, VBoxTray.exe)
-- Détection Hyper-V
-- Vérification CPUID
-- Analyse des registres VM
-- Détection sandbox (timing attacks)
+**7 méthodes de détection** :
+
+| Méthode | Description | Critère de détection |
+|---------|-------------|---------------------|
+| Hypervisor Bit | CPUID bit 31 de ECX | Bit activé = VM |
+| CPU ID | Vérifie le vendor ID | != "AuthenticAMD" ou "GenuineIntel" |
+| CPU Brand String | Analyse le nom du CPU | Contient "virtual", "qemu", "vmware", "vbox", "hyper-v" |
+| Screen Resolution | Taille de l'écran | < 1280x720 ou > 3840x2160 |
+| Memory Amount | RAM totale | < 2 Go |
+| CPU Core Count | Nombre de cœurs | = 1 cœur |
+| Disk Space | Espace disque C:\ | < 20 Go |
+
+**Seuil de détection** : L'agent s'arrête si ≥ 1 détection est positive.
+
+---
+
+#### use_https
+**Type** : `boolean`  
+**Description** : Force l'utilisation de HTTPS au lieu de HTTP  
+**Défaut** : `false`
+
+```cpp
+constexpr bool USE_HTTPS = true;
+```
+
+**Note** : L'agent bypass automatiquement la validation des certificats SSL (self-signed supportés).
 
 ```mermaid
 flowchart TD
@@ -538,7 +569,7 @@ flowchart LR
     subgraph Agent
         A1[Données JSON] --> A2[XOR avec clé]
         A2 --> A3[Base64 encode]
-        A3 --> A4[HTTP POST]
+        A3 --> A4[HTTP/HTTPS POST]
     end
     
     subgraph Serveur
@@ -549,6 +580,22 @@ flowchart LR
     
     A4 --> S1
 ```
+
+### Support HTTPS
+
+L'agent supporte nativement HTTPS avec bypass de la validation des certificats :
+
+```cpp
+// Flags SSL ignorés
+SECURITY_FLAG_IGNORE_UNKNOWN_CA         // CA inconnue
+SECURITY_FLAG_IGNORE_CERT_CN_INVALID    // CN invalide
+SECURITY_FLAG_IGNORE_CERT_DATE_INVALID  // Date expirée
+SECURITY_FLAG_IGNORE_REVOCATION         // Révocation
+```
+
+**Retry Logic** : 3 tentatives en cas d'échec SSL/TLS.
+
+**Timeouts** : 30 secondes (connexion, envoi, réception).
 
 ### Implémentation XOR
 
@@ -571,25 +618,32 @@ std::string xor_encrypt(const std::string& data, const std::string& key) {
 ```
 agent/
 ├── http/
-│   ├── main_exe.cpp          # Point d'entrée EXE
-│   ├── main_dll.cpp          # Point d'entrée DLL
-│   ├── config.h              # Configuration (généré)
-│   ├── http_client.cpp       # Communication HTTP
+│   ├── main_exe.cpp          # Point d'entrée EXE (standalone)
+│   ├── main_dll.cpp          # Point d'entrée DLL (injection)
+│   ├── main_svc.cpp          # Point d'entrée Service Windows
+│   ├── config.h              # Configuration (généré dynamiquement)
+│   ├── http_client.cpp       # Communication HTTP/HTTPS (WinINet)
 │   ├── http_client.h
 │   ├── crypt.cpp             # Chiffrement XOR
 │   ├── crypt.h
-│   ├── task.cpp              # Gestionnaire de tâches
+│   ├── task.cpp              # Gestionnaire de tâches (cmd, download, upload, pe-exec)
 │   ├── task.h
-│   ├── pe-exec.cpp           # Exécution PE en mémoire
+│   ├── pe-exec.cpp           # Exécution PE en mémoire (reflective loading)
 │   ├── pe-exec.h
 │   ├── persistence.cpp       # Persistance automatique (T1547.001)
 │   ├── persistence.h
 │   ├── base64.cpp            # Encodage Base64
 │   ├── base64.h
+│   ├── file_utils.cpp        # Opérations fichiers (read/write binaire)
+│   ├── file_utils.h
+│   ├── system_utils.cpp      # Infos système (hostname, IP, etc.)
+│   ├── system_utils.h
+│   ├── vm_detection.cpp      # Détection VM (7 méthodes)
 │   ├── json.hpp              # Parser JSON (nlohmann)
-│   └── anti_vm.cpp           # Détection VM
-└── ReflectiveLoader/         # Génération shellcode
-    └── ...
+│   └── ReflectiveLoader/     # Génération shellcode
+│       └── DllLoaderShellcode/
+│           ├── shellcodize.py    # Convertisseur DLL → Shellcode
+│           └── Loader/           # Code du loader réflectif
 ```
 
 ---
@@ -635,6 +689,7 @@ constexpr char HEADER[] = "Accept: application/json, text/plain, */*\r\nAccept-L
 constexpr char RESULTS_PATH[] = "/api/v2/telemetry/collect";
 constexpr int BEACON_INTERVAL = 300;
 constexpr bool ANTI_VM_ENABLED = true;
+constexpr bool USE_HTTPS = true;
 ```
 
 ---

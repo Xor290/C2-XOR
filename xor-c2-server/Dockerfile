@@ -38,7 +38,7 @@ RUN mkdir -p config
 COPY config/config.json ./config/
 
 # Expose ports (Admin API + default listener)
-EXPOSE 8088 80
+EXPOSE 8088 80 443
 
 # Run the server
 CMD ["./xor-c2-server"]
