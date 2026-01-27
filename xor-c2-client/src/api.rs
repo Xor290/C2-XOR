@@ -341,6 +341,9 @@ impl ApiClient {
             user_agent: config.user_agent.clone(),
             uri_paths: config.uri_paths.clone(),
             headers: config.headers.clone(),
+            tls_cert: String::new(),
+            tls_key: String::new(),
+            tls_cert_chain: String::new(),
         };
 
         let response = client

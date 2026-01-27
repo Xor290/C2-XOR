@@ -5,7 +5,7 @@ mod encryption;
 mod listener;
 
 use crate::admin::Database;
-use crate::listener::ListenerProfile;
+use crate::listener::{ListenerProfile, ListenerProfileHttps};
 use admin::admin_server;
 use agents::agent_handler::AgentHandler;
 use listener::http_listener;
@@ -62,6 +62,7 @@ async fn main() {
 
     let mut listener_handles = Vec::new();
 
+    // ===== Start HTTP listeners =====
     for listener in listeners {
         if listener.listener_type.to_lowercase() == "http" {
             log::info!(
@@ -92,6 +93,50 @@ async fn main() {
 
             listener_handles.push(handle);
         }
+    }
+
+    // ===== Load and start HTTPS listeners =====
+    let https_listeners = match db.get_listeners_https() {
+        Ok(list) => {
+            log::info!("[+] Loaded {} HTTPS listener(s) from database", list.len());
+            list
+        }
+        Err(e) => {
+            log::warn!("[!] Failed to load HTTPS listeners from DB: {}", e);
+            Vec::new()
+        }
+    };
+
+    for listener in https_listeners {
+        log::info!(
+            "[+] Starting HTTPS listener '{}' on {}:{} (TLS enabled)",
+            listener.name,
+            listener.host,
+            listener.port
+        );
+
+        let handler = agent_handler.clone();
+        let db_clone = Arc::clone(&db);
+
+        let listener_profile = ListenerProfileHttps {
+            name: listener.name,
+            host: listener.host,
+            listener_type: listener.listener_type,
+            port: listener.port,
+            user_agent: listener.user_agent,
+            xor_key: listener.xor_key,
+            uri_paths: listener.uri_paths,
+            http_headers: listener.http_headers,
+            tls_cert: listener.tls_cert,
+            tls_key: listener.tls_key,
+            tls_cert_chain: listener.tls_cert_chain,
+        };
+
+        let handle = tokio::spawn(async move {
+            http_listener::start_https(listener_profile, handler, db_clone).await;
+        });
+
+        listener_handles.push(handle);
     }
 
     // --------- Start admin server ---------

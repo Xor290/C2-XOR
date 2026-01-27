@@ -1,13 +1,14 @@
 // src/admin/mod.rs
 
 pub mod auth;
+pub mod cert_generator;
 pub mod command_formatter;
 pub mod db;
 pub mod error;
 pub mod models;
-pub mod routes; // ← AJOUTER CETTE LIGNE
+pub mod routes;
 
-pub use db::Database; // ← AJOUTER CETTE LIGNE
+pub use db::Database;
 
 pub mod admin_server {
     use crate::agents::agent_handler::AgentHandler;

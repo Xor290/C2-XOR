@@ -4,10 +4,11 @@ use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 
+use crate::admin::cert_generator;
 use crate::admin::command_formatter::CommandFormatter;
 use crate::admin::models::*;
 use crate::admin::{auth::JwtManager, Database};
-use crate::agents::agent_handler::{AgentConfig, AgentHandler}; // Ajout de AgentConfig
+use crate::agents::agent_handler::{AgentConfig, AgentHandler};
 use crate::config::Config;
 use actix_web::http::header::{ContentDisposition, DispositionParam, DispositionType};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -386,31 +387,133 @@ async fn add_listener(
             message: e.to_string(),
         });
     }
-
     let headers_json = serde_json::to_string(&body.headers).unwrap();
 
+    if body.listener_type == "https" {
+        // ===== HTTPS Listener =====
+        let (tls_cert, tls_key, tls_cert_chain, cert_auto_generated) = if body.tls_cert.is_empty()
+            || body.tls_key.is_empty()
+        {
+            // Auto-generate self-signed certificate
+            log::info!(
+                "[*] No certificate provided, generating self-signed certificate for '{}'",
+                body.listener_name
+            );
+
+            match cert_generator::generate_cert_for_listener(&body.listener_name, &body.listener_ip)
+            {
+                Ok(generated) => {
+                    log::info!(
+                        "[+] Self-signed certificate generated for listener '{}'",
+                        body.listener_name
+                    );
+                    // For self-signed, cert_chain is the same as cert
+                    (
+                        generated.cert_pem.clone(),
+                        generated.key_pem,
+                        generated.cert_pem,
+                        true,
+                    )
+                }
+                Err(e) => {
+                    log::error!("[!] Failed to generate certificate: {}", e);
+                    return HttpResponse::InternalServerError().json(ApiResponse {
+                        success: false,
+                        message: format!("Failed to generate self-signed certificate: {}", e),
+                    });
+                }
+            }
+        } else {
+            // Use provided certificates
+            let cert_chain = if body.tls_cert_chain.is_empty() {
+                body.tls_cert.clone()
+            } else {
+                body.tls_cert_chain.clone()
+            };
+            (
+                body.tls_cert.clone(),
+                body.tls_key.clone(),
+                cert_chain,
+                false,
+            )
+        };
+
+        if let Err(e) = state.database.add_listener_https(
+            &body.listener_name,
+            &body.listener_type,
+            &body.listener_ip,
+            body.listener_port,
+            &body.xor_key,
+            &body.user_agent,
+            &body.uri_paths,
+            &headers_json,
+            &tls_cert,
+            &tls_key,
+            &tls_cert_chain,
+        ) {
+            log::warn!("Failed to add HTTPS listener: {}", e);
+            return HttpResponse::InternalServerError().json(ApiResponse {
+                success: false,
+                message: format!("Failed to add HTTPS listener: {}", e),
+            });
+        }
+
+        let cert_info = if cert_auto_generated {
+            " (self-signed certificate auto-generated)"
+        } else {
+            ""
+        };
+
+        log::info!(
+            "[+] HTTPS listener '{}' added on {}:{}{}",
+            body.listener_name,
+            body.listener_ip,
+            body.listener_port,
+            cert_info
+        );
+
+        return HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": format!(
+                "HTTPS Listener '{}' added successfully{}. Restart server to activate.",
+                body.listener_name,
+                cert_info
+            ),
+            "cert_auto_generated": cert_auto_generated
+        }));
+    }
+
+    // ===== HTTP Listener =====
     if let Err(e) = state.database.add_listener(
         &body.listener_name,
         &body.listener_type,
         &body.listener_ip,
-        body.listener_port, // <- FIXED
+        body.listener_port,
         &body.xor_key,
         &body.user_agent,
         &body.uri_paths,
-        &headers_json, // <- FIXED
+        &headers_json,
     ) {
-        log::warn!("Failed to add listener: {}", e);
+        log::warn!("Failed to add HTTP listener: {}", e);
         return HttpResponse::InternalServerError().json(ApiResponse {
             success: false,
-            message: "Failed to add listener".to_string(),
+            message: format!("Failed to add HTTP listener: {}", e),
         });
     }
 
-    log::info!("Listener added");
+    log::info!(
+        "[+] HTTP listener '{}' added on {}:{}",
+        body.listener_name,
+        body.listener_ip,
+        body.listener_port
+    );
 
     HttpResponse::Ok().json(ApiResponse {
         success: true,
-        message: "Listener added successfully".to_string(),
+        message: format!(
+            "HTTP Listener '{}' added successfully. Restart server to activate.",
+            body.listener_name
+        ),
     })
 }
 

