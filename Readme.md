@@ -59,6 +59,21 @@ docker run -d \
 xor-c2-server
 ```
 
+# Devshell Nix
+
+Vous pouvez utiliser Nix pour configurer un env de développement avec toutes les dépendances nécessaires.
+
+```bash
+nix develop
+```
+
+ou utiliser direnv
+
+```bash
+direnv allow
+```
+
 # Disclaimer
 
-This project is for educational purposes only. Use it responsibly and ethically.
+> [!WARNING]
+> This project is for educational purposes only. Use it responsibly and ethically.
