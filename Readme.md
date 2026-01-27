@@ -54,26 +54,12 @@ puis lancer le container
 docker run -d \
 -p 8088:8088 \
 -p 80:80 \
+--secret jwt_secret=CECI_EST_UN_SECRET_SEEEEEEECRET \
 -v $(pwd)/xor_c2.db:/app/xor_c2.db \
 --name c2-server \
 xor-c2-server
 ```
 
-# Devshell Nix
-
-Vous pouvez utiliser Nix pour configurer un env de développement avec toutes les dépendances nécessaires.
-
-```bash
-nix develop
-```
-
-ou utiliser direnv
-
-```bash
-direnv allow
-```
-
 # Disclaimer
 
-> [!WARNING]
-> This project is for educational purposes only. Use it responsibly and ethically.
+This project is for educational purposes only. Use it responsibly and ethically.

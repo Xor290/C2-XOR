@@ -28,14 +28,24 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the binary from builder
-COPY --from=builder /app/target/release/xor-c2-server .
+# Create non-root user
+RUN groupadd -r xor-c2 && useradd -r -g xor-c2 xor-c2
+
+# Copy binary with correct ownership
+COPY --from=builder --chown=xor-c2:xor-c2 /app/target/release/xor-c2-server .
+
+# Set capabilities for binding to privileged ports
+RUN setcap 'cap_net_bind_service=+ep' /app/xor-c2-server
 
 # Create config directory
-RUN mkdir -p config
+RUN mkdir -p config && chown -R xor-c2:xor-c2 /app
+COPY --chown=xor-c2:xor-c2 config/config.json ./config/
 
-# Copy default config
-COPY config/config.json ./config/
+# Set environment variables
+ENV JWT_EXP_HOURS=24
+
+# Set user to non-root
+USER xor-c2
 
 # Expose ports (Admin API + default listener)
 EXPOSE 8088 80 443
