@@ -5,6 +5,7 @@ pub mod cert_generator;
 pub mod command_formatter;
 pub mod db;
 pub mod error;
+pub mod handlers;
 pub mod models;
 pub mod routes;
 

@@ -19,12 +19,19 @@ flowchart TB
     subgraph Backend["Teamserver - Rust"]
         subgraph AdminAPI["Admin API :8088"]
             Auth[Authentification<br/>JWT + bcrypt]
-            Routes[Routes REST<br/>Actix-web]
+            subgraph Handlers["Handlers modulaires"]
+                H1[auth.rs]
+                H2[agents.rs]
+                H3[tasks.rs]
+                H4[files.rs]
+                H5[listeners.rs]
+                H6[victims.rs]
+            end
         end
         
         subgraph Listeners["Listeners"]
             HTTP[HTTP Listener<br/>Axum :80]
-            HTTP2[Autres Listeners<br/>Ports configurables]
+            HTTPS[HTTPS Listener<br/>Axum :443]
         end
         
         DB[(SQLite<br/>xor_c2.db)]
@@ -33,17 +40,21 @@ flowchart TB
 
     subgraph Targets["Cibles"]
         Agent1[Agent Windows<br/>EXE/DLL]
-        Agent2[Agent Windows<br/>Shellcode]
+        Agent2[Agent Windows<br/>Shellcode/Service]
     end
 
     GUI --> Auth
     CLI --> Auth
-    Auth --> Routes
-    Routes --> DB
+    Auth --> Handlers
+    Handlers --> DB
     HTTP --> DB
+    HTTPS --> DB
     HTTP --> Crypto
+    HTTPS --> Crypto
     Agent1 --> HTTP
+    Agent1 --> HTTPS
     Agent2 --> HTTP
+    Agent2 --> HTTPS
 ```
 
 ## Flux de Communication
@@ -767,35 +778,89 @@ fn xor_transform(data: &[u8], key: &str) -> Vec<u8> {
 ## Structure des Dossiers
 
 ```
-xor-c2-server/
-├── config/
-│   └── config.json              # Configuration serveur
-├── src/
-│   ├── main.rs                  # Point d'entrée
-│   ├── admin/
-│   │   ├── mod.rs               # Module admin
-│   │   ├── routes.rs            # Endpoints API REST
-│   │   ├── auth.rs              # Gestion JWT
-│   │   ├── db.rs                # Opérations SQLite
-│   │   ├── models.rs            # DTOs requête/réponse
-│   │   ├── command_formatter.rs # Formatage commandes
-│   │   ├── cert_generator.rs    # Génération certificats TLS
-│   │   └── error.rs             # Gestion erreurs
-│   ├── agents/
-│   │   └── agent_handler.rs     # Cycle de vie agents + compilation
-│   ├── listener/
-│   │   ├── mod.rs               # Module listener
-│   │   ├── http_listener.rs     # Listener HTTP/HTTPS (Axum)
-│   │   └── profile.rs           # Configuration listener
-│   ├── encryption/
-│   │   ├── mod.rs               # Module encryption
-│   │   └── xor_cipher.rs        # Implémentation XOR
-│   └── config.rs                # Chargement configuration
-├── downloads/                   # Fichiers téléchargés depuis agents
-├── agents_results/              # Agents générés (exe, dll)
-├── temp_uploads/                # Fichiers temporaires pour upload
-├── Cargo.toml
-└── xor_c2.db                    # Base SQLite
+C2-XOR/
+├── docs/
+│   ├── AGENT.md                     # Documentation agent
+│   └── BACKEND.md                   # Documentation backend (ce fichier)
+│
+├── xor-c2-server/                   # Backend (Teamserver)
+│   ├── config/
+│   │   └── config.json              # Configuration serveur
+│   ├── src/
+│   │   ├── main.rs                  # Point d'entrée
+│   │   ├── config.rs                # Chargement configuration
+│   │   ├── admin/
+│   │   │   ├── mod.rs               # Module admin
+│   │   │   ├── routes.rs            # AppState + démarrage serveur
+│   │   │   ├── auth.rs              # Gestion JWT (JwtManager)
+│   │   │   ├── db.rs                # Opérations SQLite
+│   │   │   ├── models.rs            # DTOs requête/réponse
+│   │   │   ├── command_formatter.rs # Formatage commandes
+│   │   │   ├── cert_generator.rs    # Génération certificats TLS
+│   │   │   ├── error.rs             # Types d'erreurs serveur
+│   │   │   └── handlers/            # Handlers API REST (modulaires)
+│   │   │       ├── mod.rs           # Exports des handlers
+│   │   │       ├── auth.rs          # health_check, login, logout
+│   │   │       ├── agents.rs        # list_agents, generate_agent, agent_checkin
+│   │   │       ├── tasks.rs         # send_task, get_results
+│   │   │       ├── files.rs         # upload, download, view
+│   │   │       ├── listeners.rs     # add_listener (HTTP/HTTPS)
+│   │   │       └── victims.rs       # list_victims, get_victim_details
+│   │   ├── agents/
+│   │   │   ├── mod.rs               # Module agents
+│   │   │   └── agent_handler.rs     # Cycle de vie agents + compilation
+│   │   ├── listener/
+│   │   │   ├── mod.rs               # Module listener
+│   │   │   ├── http_listener.rs     # Listener HTTP/HTTPS (Axum)
+│   │   │   └── profile.rs           # Configuration listener
+│   │   ├── helper/
+│   │   │   ├── mod.rs               # Module helper
+│   │   │   └── helper_listener.rs   # Helpers réponses HTTP
+│   │   └── encryption/
+│   │       ├── mod.rs               # Module encryption
+│   │       └── xor_cipher.rs        # Implémentation XOR
+│   ├── downloads/                   # Fichiers téléchargés depuis agents
+│   │   └── decrypt.py               # Script déchiffrement fichiers
+│   ├── agents_results/              # Agents générés (exe, dll)
+│   ├── temp_uploads/                # Fichiers temporaires pour upload
+│   ├── Cargo.toml                   # Dépendances Rust
+│   └── xor_c2.db                    # Base SQLite
+│
+├── xor-c2-client/                   # Client GUI (Opérateur)
+│   ├── src/
+│   │   ├── main.rs                  # Point d'entrée
+│   │   ├── api.rs                   # Appels API REST
+│   │   ├── models.rs                # Structures de données
+│   │   ├── state.rs                 # État de l'application
+│   │   ├── ui.rs                    # Module UI
+│   │   └── ui/
+│   │       ├── login.rs             # Interface de connexion
+│   │       └── main_interface.rs    # Interface principale
+│   ├── download/
+│   │   └── decrypt.py               # Script déchiffrement fichiers
+│   └── Cargo.toml                   # Dépendances Rust
+│
+└── agent/                           # Agent Windows (C++)
+    └── http/
+        ├── main_exe.cpp             # Point d'entrée EXE
+        ├── main_dll.cpp             # Point d'entrée DLL
+        ├── main_svc.cpp             # Point d'entrée Service Windows
+        ├── config.h                 # Configuration (généré)
+        ├── http_client.cpp/h        # Communication HTTP/HTTPS
+        ├── crypt.cpp/h              # Chiffrement XOR
+        ├── base64.cpp/h             # Encodage Base64
+        ├── task.cpp/h               # Gestionnaire de tâches
+        ├── pe-exec.cpp/h            # Exécution PE en mémoire
+        ├── persistence.cpp/h        # Persistance (T1547.001)
+        ├── file_utils.cpp/h         # Opérations fichiers
+        ├── system_utils.cpp/h       # Infos système
+        ├── vm_detection.cpp         # Détection VM (7 méthodes)
+        └── ReflectiveLoader/
+            ├── shellcodize.py       # Convertisseur DLL → Shellcode
+            └── DllLoaderShellcode/
+                └── Loader/
+                    ├── ReflectiveLoader.cpp
+                    └── ReflectiveLoader.h
 ```
 
 ---
