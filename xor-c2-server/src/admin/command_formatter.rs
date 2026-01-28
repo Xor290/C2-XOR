@@ -129,7 +129,7 @@ impl CommandFormatter {
             args
         );
 
-        let path = Path::new(pe_path);
+        let _path = Path::new(pe_path);
         let pe_content =
             fs::read(pe_path).map_err(|e| format!("Failed to read executable: {}", e))?;
 

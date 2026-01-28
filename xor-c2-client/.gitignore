@@ -1,3 +1,4 @@
 target/
 agent_exe_*.*
 agent_dll_*.*
+download/*
