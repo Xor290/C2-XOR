@@ -18,14 +18,27 @@ flowchart TB
 
     subgraph Backend["Teamserver - Rust"]
         subgraph AdminAPI["Admin API :8088"]
-            Auth[Authentification<br/>JWT + bcrypt]
-            subgraph Handlers["Handlers modulaires"]
+            subgraph Routes["routes/"]
+                AppState[AppState]
+                Router[Router Actix]
+            end
+            Auth[auth.rs<br/>JWT + bcrypt]
+            subgraph Handlers["handlers/"]
                 H1[auth.rs]
                 H2[agents.rs]
                 H3[tasks.rs]
                 H4[files.rs]
                 H5[listeners.rs]
                 H6[victims.rs]
+            end
+            subgraph Database["db/"]
+                DBMod[mod.rs]
+                DBSchema[schema.rs]
+                DBUsers[users.rs]
+                DBAgents[agents.rs]
+                DBListeners[listeners.rs]
+                DBCommands[commands.rs]
+                DBResults[results.rs]
             end
         end
         
@@ -43,10 +56,12 @@ flowchart TB
         Agent2[Agent Windows<br/>Shellcode/Service]
     end
 
-    GUI --> Auth
-    CLI --> Auth
+    GUI --> Router
+    CLI --> Router
+    Router --> Auth
     Auth --> Handlers
-    Handlers --> DB
+    Handlers --> Database
+    Database --> DB
     HTTP --> DB
     HTTPS --> DB
     HTTP --> Crypto
@@ -788,16 +803,28 @@ C2-XOR/
 │   │   └── config.json              # Configuration serveur
 │   ├── src/
 │   │   ├── main.rs                  # Point d'entrée
-│   │   ├── config.rs                # Chargement configuration
+│   │   ├── config/                  # Module configuration
+│   │   │   ├── mod.rs               # Exports du module
+│   │   │   └── config.rs            # Chargement configuration
 │   │   ├── admin/
 │   │   │   ├── mod.rs               # Module admin
-│   │   │   ├── routes.rs            # AppState + démarrage serveur
 │   │   │   ├── auth.rs              # Gestion JWT (JwtManager)
-│   │   │   ├── db.rs                # Opérations SQLite
-│   │   │   ├── models.rs            # DTOs requête/réponse
 │   │   │   ├── command_formatter.rs # Formatage commandes
 │   │   │   ├── cert_generator.rs    # Génération certificats TLS
 │   │   │   ├── error.rs             # Types d'erreurs serveur
+│   │   │   ├── routes/              # Routes API (modulaires)
+│   │   │   │   ├── mod.rs           # Exports (start_server, AppState)
+│   │   │   │   └── routes.rs        # AppState + démarrage serveur
+│   │   │   ├── db/                  # Base de données (modulaire)
+│   │   │   │   ├── mod.rs           # Exports du module Database
+│   │   │   │   ├── schema.rs        # Schéma et initialisation tables
+│   │   │   │   ├── users.rs         # Opérations utilisateurs
+│   │   │   │   ├── agents.rs        # Opérations agents
+│   │   │   │   ├── listeners.rs     # Opérations listeners
+│   │   │   │   ├── commands.rs      # Opérations commandes
+│   │   │   │   └── results.rs       # Opérations résultats
+│   │   │   ├── models/              # DTOs requête/réponse (modulaire)
+│   │   │   │   └── mod.rs           # Structures de données API
 │   │   │   └── handlers/            # Handlers API REST (modulaires)
 │   │   │       ├── mod.rs           # Exports des handlers
 │   │   │       ├── auth.rs          # health_check, login, logout
@@ -829,7 +856,15 @@ C2-XOR/
 ├── xor-c2-client/                   # Client GUI (Opérateur)
 │   ├── src/
 │   │   ├── main.rs                  # Point d'entrée
-│   │   ├── api.rs                   # Appels API REST
+│   │   ├── api/                     # Module API (modulaire)
+│   │   │   ├── mod.rs               # Exports ApiClient
+│   │   │   ├── auth.rs              # login, logout
+│   │   │   ├── agents.rs            # fetch_agents, generate_agent_with_config
+│   │   │   ├── tasks.rs             # send_command
+│   │   │   ├── results.rs           # fetch_results
+│   │   │   ├── listeners.rs         # add_listener
+│   │   │   ├── files.rs             # download_result_file
+│   │   │   └── utils.rs             # decode_base64_if_needed, format_timestamp
 │   │   ├── models.rs                # Structures de données
 │   │   ├── state.rs                 # État de l'application
 │   │   ├── ui.rs                    # Module UI
