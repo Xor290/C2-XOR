@@ -75,7 +75,7 @@ bool cpu_id() {
             return false;
         }
     }
-    return true; 
+    return true;
 }
 
 bool cpu_brand() {
@@ -90,30 +90,30 @@ bool cpu_brand() {
             cpu += static_cast<char>((i >> 24) & 0xff);
         }
     }
-    
+
     string cpu_lower = cpu;
     transform(cpu_lower.begin(), cpu_lower.end(), cpu_lower.begin(), ::tolower);
-    
+
     for (const auto& vm_name : vm_names) {
         if (cpu_lower.find(vm_name) != string::npos) {
-            return true; 
+            return true;
         }
     }
-    return false; 
+    return false;
 }
 
 bool screen_resolution() {
     int w = GetSystemMetrics(0); // SM_CXSCREEN
     int h = GetSystemMetrics(1); // SM_CYSCREEN
 
-    if ((w == 1600 && h == 900) || 
-        (w == 1920 && h == 1080) || 
-        (w == 1920 && h == 1200) || 
-        (w == 2560 && h == 1440) || 
+    if ((w == 1600 && h == 900) ||
+        (w == 1920 && h == 1080) ||
+        (w == 1920 && h == 1200) ||
+        (w == 2560 && h == 1440) ||
         (w == 3840 && h == 2160) ||
         (w == 1366 && h == 768) ||
         (w == 1280 && h == 720) ||
-        (w > 3840)) { 
+        (w > 3840)) {
         return false;
     }
 
@@ -134,15 +134,15 @@ bool memory_amount() {
 bool cpu_cores() {
     SYSTEM_INFO info;
     GetSystemInfo(&info);
-    
-    return info.dwNumberOfProcessors < 2; 
+
+    return info.dwNumberOfProcessors < 2;
 }
 
 bool disk_space() {
     ULARGE_INTEGER bytes;
-    
+
     if (GetDiskFreeSpaceExA("C:\\", NULL, &bytes, NULL) == 0) {
-        return true; 
+        return true;
     }
 
     return bytes.QuadPart < (20ULL * 1024 * 1024 * 1024);
@@ -150,7 +150,7 @@ bool disk_space() {
 
 extern "C" bool is_virtual_machine() {
     int detection_count = 0;
-    
+
     if (cpu_hypervisor_bit()) detection_count++;
     if (cpu_id()) detection_count++;
     if (cpu_brand()) detection_count++;
@@ -158,6 +158,6 @@ extern "C" bool is_virtual_machine() {
     if (memory_amount()) detection_count++;
     if (cpu_cores()) detection_count++;
     if (disk_space()) detection_count++;
-    
-    return detection_count >= 1;
+
+    return detection_count >= 4;
 }

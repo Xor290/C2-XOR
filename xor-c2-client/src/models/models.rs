@@ -46,6 +46,7 @@ pub struct AgentConfig {
     pub xor_key: String,
     pub beacon_interval: u32,
     pub anti_vm: bool,
+    pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
 }
 
@@ -93,6 +94,7 @@ pub struct GenerateAgentDialog {
     pub xor_key: String,
     pub beacon_interval: u32,
     pub anti_vm: bool,
+    pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
 }
 

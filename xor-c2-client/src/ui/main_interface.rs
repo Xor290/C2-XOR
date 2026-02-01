@@ -249,6 +249,11 @@ impl C2Client {
 
                 ui.add_space(10.0);
 
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.generate_dialog.anti_debug, "Anti-Debug");
+                });
+
+                ui.add_space(10.0);
                 if !self.generate_dialog.status_message.is_empty() {
                     let color = if self.generate_dialog.status_message.contains("Success")
                         || self.generate_dialog.status_message.contains("saved")

