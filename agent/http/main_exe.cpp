@@ -582,7 +582,7 @@ void agent_run() {
 
 int main() {
     #ifdef ANTI_DEBUG_ENABLED
-    anti_debug_basic();
+    is_debugged();
     #endif
 
     #ifdef ANTI_VM_ENABLED

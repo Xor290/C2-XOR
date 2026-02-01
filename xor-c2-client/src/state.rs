@@ -108,8 +108,6 @@ pub fn get_file_extension(payload_type: &str) -> &str {
     match payload_type.to_lowercase().as_str() {
         "exe" => "exe",
         "dll" => "dll",
-        "elf" => "elf",
-        "macho" => "macho",
         "shellcode" => "bin",
         _ => "bin",
     }
