@@ -547,7 +547,11 @@ impl C2Client {
             ui.label("$");
             let response = ui.add_enabled(
                 self.selected_agent.is_some(),
-                egui::TextEdit::singleline(&mut self.command_input).hint_text("Enter command..."),
+                egui::TextEdit::multiline(&mut self.command_input)
+                    .desired_rows(3) // hauteur initiale
+                    .desired_width(ui.available_width() * 0.5) // largeur complète du panel
+                    .lock_focus(true)
+                    .hint_text("Enter command..."),
             );
 
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
