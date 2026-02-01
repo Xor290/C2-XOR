@@ -476,18 +476,67 @@ impl C2Client {
                         return;
                     }
 
-                    for result in &self.results {
-                        if result.is_command {
-                            ui.colored_label(egui::Color32::GREEN, format!("$ {}", result.content));
-                        } else {
-                            ui.colored_label(egui::Color32::LIGHT_GRAY, &result.content);
-                        }
+                    let results_clone = self.results.clone(); // clone pour lecture dans closures
+                    for i in 0..results_clone.len() {
+                        if results_clone[i].is_command {
+                            // index de la commande
+                            let cmd_idx = i;
 
-                        ui.colored_label(
-                            egui::Color32::DARK_GRAY,
-                            format!("  [{}]", result.timestamp),
-                        );
-                        ui.add_space(5.0);
+                            // clone des infos pour l'affichage
+                            let collapse_symbol = if results_clone[cmd_idx].is_collapsed {
+                                "▶"
+                            } else {
+                                "▼"
+                            };
+                            let content = results_clone[cmd_idx].content.clone();
+                            let timestamp = results_clone[cmd_idx].timestamp.clone();
+
+                            ui.horizontal(|ui| {
+                                if ui.small_button(collapse_symbol).clicked() {
+                                    // mutable borrow séparé hors de la closure
+                                    let command = &mut self.results[cmd_idx];
+                                    let new_state = !command.is_collapsed;
+                                    command.is_collapsed = new_state;
+
+                                    // appliquer aux résultats associés
+                                    let mut j = cmd_idx + 1;
+                                    while j < self.results.len() && !self.results[j].is_command {
+                                        self.results[j].is_collapsed = new_state;
+                                        j += 1;
+                                    }
+                                }
+
+                                ui.colored_label(egui::Color32::GREEN, format!("$ {}", content));
+                                ui.colored_label(
+                                    egui::Color32::DARK_GRAY,
+                                    format!("[{}]", timestamp),
+                                );
+                            });
+
+                            // afficher résultats si pas collapsed
+                            if !self.results[cmd_idx].is_collapsed {
+                                let mut j = cmd_idx + 1;
+                                while j < self.results.len() && !self.results[j].is_command {
+                                    let r_content = self.results[j].content.clone();
+                                    let r_timestamp = self.results[j].timestamp.clone();
+
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(20.0);
+                                        ui.vertical(|ui| {
+                                            ui.colored_label(egui::Color32::LIGHT_GRAY, &r_content);
+                                            if !r_timestamp.is_empty() {
+                                                ui.colored_label(
+                                                    egui::Color32::DARK_GRAY,
+                                                    format!("  [{}]", r_timestamp),
+                                                );
+                                            }
+                                        });
+                                    });
+
+                                    j += 1;
+                                }
+                            }
+                        }
                     }
                 });
         });
@@ -496,7 +545,6 @@ impl C2Client {
 
         ui.horizontal(|ui| {
             ui.label("$");
-
             let response = ui.add_enabled(
                 self.selected_agent.is_some(),
                 egui::TextEdit::singleline(&mut self.command_input).hint_text("Enter command..."),
@@ -533,6 +581,13 @@ impl C2Client {
 
         self.command_error.clear();
 
+        // Marquer toutes les commandes existantes comme collapsed
+        for result in &mut self.results {
+            if result.is_command {
+                result.is_collapsed = true;
+            }
+        }
+
         let command = self.command_input.clone();
         let agent_id = self.selected_agent.as_ref().unwrap().id.clone();
         let token = self.token.clone().unwrap();
@@ -545,12 +600,14 @@ impl C2Client {
             self.results = self.results.split_off(keep_from);
         }
 
+        // Ajouter la nouvelle commande (elle reste expanded pour voir les résultats en temps réel)
         self.results.push(crate::models::CommandResult {
             timestamp: Local::now().format("%H:%M:%S").to_string(),
             is_command: true,
             content: command.clone(),
             result_id: None,
             is_file: false,
+            is_collapsed: false, // La toute dernière commande reste visible
         });
 
         match self.rt.block_on(ApiClient::send_command(
@@ -601,22 +658,34 @@ impl C2Client {
             let agent_id = agent.id.clone();
             let server_url = self.server_url.clone();
             let save_dir = "download";
+
             match self.rt.block_on(ApiClient::fetch_results(
                 &server_url,
                 &token,
                 &agent_id,
                 &save_dir,
             )) {
-                Ok(new_results) => {
-                    let local_commands: Vec<_> = self
-                        .results
-                        .iter()
-                        .filter(|r| r.is_command)
-                        .cloned()
-                        .collect();
+                Ok(mut new_results) => {
+                    // Marquer tous les nouveaux résultats comme non-collapsed
+                    for r in &mut new_results {
+                        r.is_collapsed = false;
+                    }
 
-                    self.results = local_commands;
-                    self.results.extend(new_results);
+                    // Fusionner résultats existants + nouveaux résultats
+                    // Conserver toutes les commandes précédentes et leurs résultats
+                    let mut merged_results = self.results.clone();
+
+                    // Ajouter seulement les nouvelles commandes/résultats qui n'existent pas déjà
+                    for r in new_results {
+                        let exists = merged_results
+                            .iter()
+                            .any(|old| old.timestamp == r.timestamp && old.content == r.content);
+                        if !exists {
+                            merged_results.push(r);
+                        }
+                    }
+
+                    self.results = merged_results;
 
                     println!(
                         "[+] Results updated: {} command(s) + {} result(s)",

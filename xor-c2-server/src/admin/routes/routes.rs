@@ -67,6 +67,7 @@ pub async fn start_server(config: Config, agent_handler: AgentHandler) {
             // Tasks
             .service(handlers::send_task)
             .service(handlers::get_results)
+            .service(handlers::get_results_by_command)
             // Files
             .service(handlers::download_physical_file)
             .service(handlers::download_result_file)

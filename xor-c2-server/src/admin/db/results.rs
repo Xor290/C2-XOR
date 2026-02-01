@@ -135,6 +135,33 @@ impl Database {
 
         Ok(results)
     }
+    pub fn get_results_by_command_id(&self, command_id: i64) -> SqlResult<Vec<ResultDetail>> {
+        let conn = self.conn()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, command_id, output, success, received_at, types, filename
+             FROM results
+             WHERE command_id = ?1
+             ORDER BY received_at DESC",
+        )?;
+
+        let results = stmt
+            .query_map([command_id], |row| {
+                Ok(ResultDetail {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    command_id: row.get(2)?,
+                    output: row.get(3)?,
+                    success: row.get(4)?,
+                    received_at: row.get(5)?,
+                    r#types: row.get(6).ok(),
+                    filename: row.get(7).ok(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(results)
+    }
 
     pub fn get_upload_data_for_command(&self, command_id: i64) -> SqlResult<Option<String>> {
         let conn = self.conn()?;

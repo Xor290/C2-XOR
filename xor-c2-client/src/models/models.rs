@@ -75,6 +75,7 @@ pub struct CommandResult {
     pub content: String,
     pub result_id: Option<i64>,
     pub is_file: bool,
+    pub is_collapsed: bool,
 }
 
 #[derive(Clone, Debug)]

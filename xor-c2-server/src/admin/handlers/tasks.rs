@@ -123,6 +123,61 @@ pub async fn send_task(
     })
 }
 
+#[get("/api/results/command/{command_id}")]
+pub async fn get_results_by_command(
+    state: Data<AppState>,
+    command_id: Path<i64>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(e) = state.jwt_manager.authenticate(&req, &state.database) {
+        return HttpResponse::Unauthorized().json(ApiResponse {
+            success: false,
+            message: e.to_string(),
+        });
+    }
+
+    let command_id = command_id.into_inner();
+
+    match state.database.get_results_by_command_id(command_id) {
+        Ok(results) => {
+            log::info!(
+                "[+] Retrieved {} result(s) for command {}",
+                results.len(),
+                command_id
+            );
+
+            let formatted_results: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "agent_id": r.agent_id,
+                        "command_id": r.command_id,
+                        "output": r.output,
+                        "success": r.success,
+                        "types": r.r#types,
+                        "filename": r.filename,
+                        "received_at": r.received_at
+                    })
+                })
+                .collect();
+
+            HttpResponse::Ok().json(formatted_results)
+        }
+        Err(e) => {
+            log::error!(
+                "[!] Failed to get results for command {}: {}",
+                command_id,
+                e
+            );
+            HttpResponse::InternalServerError().json(ApiResponse {
+                success: false,
+                message: format!("Failed to retrieve results: {}", e),
+            })
+        }
+    }
+}
+
 #[get("/api/results/{agent_id}")]
 pub async fn get_results(
     state: Data<AppState>,
