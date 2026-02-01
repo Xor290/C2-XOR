@@ -63,7 +63,21 @@ impl C2Client {
 
                 ui.horizontal(|ui| {
                     ui.label("Listener Type:");
-                    ui.text_edit_singleline(&mut self.generate_listener_dialog.listener_type);
+
+                    egui::ComboBox::from_id_source("listener_type_select")
+                        .selected_text(self.generate_listener_dialog.listener_type.as_str())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.generate_listener_dialog.listener_type,
+                                "http".to_string(),
+                                "HTTP",
+                            );
+                            ui.selectable_value(
+                                &mut self.generate_listener_dialog.listener_type,
+                                "https".to_string(),
+                                "HTTPS",
+                            );
+                        });
                 });
 
                 ui.add_space(5.0);
