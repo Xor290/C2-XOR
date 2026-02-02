@@ -103,41 +103,6 @@ docker run -d \
 xor-c2-server
 ```
 
-## Principes Éducatifs
-
-XOR C2 est conçu pour **enseigner et démontrer** les concepts fondamentaux de sécurité informatique :
-
-### Domaines couverts
-
-- **Architecture C2** : Communication bidirectionnelle agent-serveur
-- **Chiffrement réseau** : Obfuscation XOR et Base64
-- **Persistance** : Registry Run Keys (MITRE ATT&CK T1547.001)
-- **Anti-détection** : 
-  - Détection de virtualisation (7 méthodes)
-  - Détection de débogage (PEB + IsDebuggerPresent)
-  - Obfuscation de timing (sleep avec jitter)
-- **Exécution en mémoire** : Reflective PE Loading
-- **Forensique inverse** : Étude des mécanismes malware
-
-### Objectifs pédagogiques
-
-✅ **Comprendre** comment les adversaires contournent les défenses  
-✅ **Analyser** le comportement d'implants malveillants  
-✅ **Défendre** en identifiant les indicateurs de compromission  
-✅ **Étudier** les structures internes Windows  
-✅ **Pratiquer** en environnement contrôlé  
-
-### Utilisation responsable
-
-- ✅ Utiliser en **environnement de test isolé** (VM/Lab)
-- ✅ Utiliser pour **apprentissage personnel** ou **formation**
-- ✅ Utiliser pour **évaluation de sécurité autorisée** (pentest)
-- ✅ Utiliser en **contexte académique/CTF**
-
-- ❌ Ne pas déployer contre systèmes non autorisés
-- ❌ Ne pas utiliser à des fins malveillantes
-- ❌ Ne pas contourner les défenses sans permission explicite
-
 # Disclaimer
 
 This project is for educational purposes only. Use it responsibly and ethically.
