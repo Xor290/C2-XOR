@@ -48,6 +48,9 @@ pub struct AgentConfig {
     pub anti_vm: bool,
     pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
+    pub use_sleep_obfuscation: u32,
+    pub sleep_jitter_percent: f32,
+    pub encrypt_memory_on_sleep: bool,
 }
 
 #[derive(Serialize)]
@@ -86,7 +89,6 @@ pub struct GenerateAgentDialog {
     pub payload_type: String,
     pub status_message: String,
     pub is_generating: bool,
-
     pub host: String,
     pub port: u16,
     pub uri_path: String,
@@ -96,6 +98,9 @@ pub struct GenerateAgentDialog {
     pub anti_vm: bool,
     pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
+    pub use_sleep_obfuscation: u32,
+    pub sleep_jitter_percent: f32,
+    pub encrypt_memory_on_sleep: bool,
 }
 
 #[derive(Clone, Debug)]

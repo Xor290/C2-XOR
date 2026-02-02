@@ -51,6 +51,9 @@ pub async fn generate_agent_with_config(
         anti_vm: config.anti_vm,
         anti_debug: config.anti_debug,
         headers: config.headers.clone(),
+        use_sleep_obfuscation: config.use_sleep_obfuscation,
+        sleep_jitter_percent: config.sleep_jitter_percent,
+        encrypt_memory_on_sleep: config.encrypt_memory_on_sleep,
     };
 
     let payload = GenerateAgentRequest {

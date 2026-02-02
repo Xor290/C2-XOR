@@ -254,6 +254,37 @@ impl C2Client {
                 });
 
                 ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Use Sleep Obfuscation:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.generate_dialog.use_sleep_obfuscation)
+                            .clamp_range(0..=100)
+                            .speed(1),
+                    );
+                });
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.generate_dialog.encrypt_memory_on_sleep,
+                        "Encrypt Memory on Sleep",
+                    );
+                });
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Sleep Jitter Percent:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.generate_dialog.sleep_jitter_percent)
+                            .clamp_range(0.0..=100.0),
+                    );
+                });
+
+                ui.add_space(10.0);
+
                 if !self.generate_dialog.status_message.is_empty() {
                     let color = if self.generate_dialog.status_message.contains("Success")
                         || self.generate_dialog.status_message.contains("saved")
