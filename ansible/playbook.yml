@@ -1,0 +1,125 @@
+---
+- name: Déploiement XOR C2 - Serveur Rust
+  hosts: vm-deploy
+  become: true
+  gather_facts: false
+  vars:
+      project_dir: /opt/xor-c2
+      server_user: c2admin
+      server_port: 8088
+
+  tasks:
+      - name: Mise à jour des paquets
+        ansible.builtin.apt:
+            update_cache: yes
+            cache_valid_time: 3600
+
+      - name: Installation des dépendances Rust
+        apt:
+            name:
+                - curl
+                - build-essential
+                - pkg-config
+                - libssl-dev
+                - sqlite3
+                - libsqlite3-dev
+            state: present
+
+      - name: Installation de Rust
+        shell: |
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        args:
+            creates: "{{ project_dir }}/.cargo/bin/rustc"
+
+      - name: Copie des sources du serveur
+        synchronize:
+            src: "{{ playbook_dir }}/../xor-c2-server/"
+            dest: "{{ project_dir }}/xor-c2-server"
+            rsync_opts:
+                - "--exclude=target"
+
+      - name: Compilation du serveur
+        shell: |
+            source $HOME/.cargo/env
+            cd {{ project_dir }}/xor-c2-server
+            cargo build --release
+        args:
+            executable: /bin/bash
+
+      - name: Enable firewall
+        ufw:
+            state: enabled
+
+      - name: Ouvrir ports 80 et 443
+        ufw:
+            rule: allow
+            port: "{{ item }}"
+            proto: tcp
+        loop:
+            - 80
+            - 443
+            - 8080
+
+      - name: Affichage du résultat de compilation
+        debug:
+            msg: "Compilation terminée avec succès"
+
+      - name: Création du service systemd
+        copy:
+            dest: /etc/systemd/system/xor-c2-server.service
+            mode: "0644"
+            content: |
+                [Unit]
+                Description=XOR C2 Server
+                After=network.target
+
+                [Service]
+                Type=simple
+                User={{ server_user }}
+                WorkingDirectory={{ project_dir }}/xor-c2-server
+                Environment=RUST_LOG=info
+                ExecStart={{ project_dir }}/xor-c2-server/target/release/xor-c2-server
+                Restart=on-failure
+                RestartSec=10
+
+                AmbientCapabilities=CAP_NET_BIND_SERVICE
+                CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+                NoNewPrivileges=true
+
+                [Install]
+                WantedBy=multi-user.target
+
+      - name: Activation et démarrage du service
+        systemd:
+            name: xor-c2-server
+            enabled: yes
+            state: started
+            daemon_reload: yes
+
+- name: Vérification du déploiement
+  hosts: vm-deploy
+  become: true
+  vars:
+      server_port: 8088
+
+  tasks:
+      - name: Vérification du service
+        systemd:
+            name: xor-c2-server
+        register: service_status
+
+      - name: Affichage du statut
+        debug:
+            msg: "Serveur C2 : {{ service_status.status.ActiveState }}"
+
+      - name: Test de connectivité
+        uri:
+            url: "http://192.168.1.94:{{ server_port }}/health"
+            method: GET
+            status_code: [200, 404]
+        ignore_errors: true
+        register: health_check
+
+      - name: Résultat
+        debug:
+            msg: "Health check: {{ 'Accessible' if health_check.status in [200, 404] else 'Non accessible' }}"
