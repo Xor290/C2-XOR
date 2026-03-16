@@ -1,0 +1,16 @@
+[package]
+name = "packer-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "packer"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+aes-gcm = "0.10"
+sha2 = "0.10"
+lz4_flex = "0.11"
+rand = "0.8"
+anyhow = "1"

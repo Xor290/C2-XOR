@@ -1,0 +1,28 @@
+[package]
+name = "stub"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "stub"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+sha2 = "0.10"
+lz4_flex = "0.11"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = [
+    "debugapi",
+    "processthreadsapi",
+    "memoryapi",
+    "winnt",
+    "libloaderapi",
+    "fileapi",
+    "handleapi",
+    "synchapi",
+    "errhandlingapi",
+    "impl-default",
+] }
+
