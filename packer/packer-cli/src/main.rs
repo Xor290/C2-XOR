@@ -51,10 +51,12 @@ fn main() -> Result<()> {
 
     println!("[*] Chiffrement ({})...", args.encryption);
     let encrypted = match args.encryption.as_str() {
-        "aes" => encrypt::encrypt_aes256gcm(&compressed.compressed)?,
-        "xor" => encrypt::encrypt_xor(&compressed.compressed),
+        "aes"      => encrypt::encrypt_aes256gcm(&compressed.compressed)?,
+        "xor"      => encrypt::encrypt_xor(&compressed.compressed),
+        "rc4"      => encrypt::encrypt_rc4(&compressed.compressed),
+        "chacha20" => encrypt::encrypt_chacha20poly1305(&compressed.compressed)?,
         _ => bail!(
-            "Algorithme inconnu : '{}' (utiliser 'aes' ou 'xor')",
+            "Algorithme inconnu : '{}' (utiliser 'aes', 'xor', 'rc4' ou 'chacha20')",
             args.encryption
         ),
     };
