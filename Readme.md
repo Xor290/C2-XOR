@@ -1,10 +1,10 @@
 # XOR C2
 
-**Un framework C2 (Command & Control) éducatif écrit en Rust (serveur) et C++ (agent Windows).**
+**An educational C2 (Command & Control) framework written in Rust (server) and C++ (Windows agent).**
 
-Ce projet démontre les principes fondamentaux d'un C2 moderne avec support de techniques avancées d'anti-détection et d'obfuscation.
+This project demonstrates the core principles of a modern C2 framework with support for advanced anti-detection and obfuscation techniques.
 
-## Prérequis
+## Prerequisites
 
 - Rust (1.70+)
 - Cargo
@@ -12,48 +12,48 @@ Ce projet démontre les principes fondamentaux d'un C2 moderne avec support de t
 ## Installation
 
 ```bash
-# Compiler le client
+# Build the client
 cd xor-c2-client
 cargo build --release
 
-# Compiler le serveur
+# Build the server
 cd ../c2-xor-server
 cargo build --release
 ```
 
-## Démarrage
+## Getting Started
 
-### 1. Lancer le serveur
+### 1. Start the server
 
 ```bash
 cd c2-xor-server
 cargo run
-# Ou avec le binaire
+# Or with the binary
 ./target/release/xor-c2-server
 ```
 
-### 2. Lancer le client
+### 2. Start the client
 
 ```bash
 cd xor-c2-client
 cargo run
-# Ou avec le binaire
+# Or with the binary
 ./target/release/xor-c2-client
 ```
 
-### 3. Lancer le serveur avec docker
+### 3. Start the server with Docker
 
 ```bash
 docker build -t xor-c2-server .
 ```
 
-puis lancer le container
+Then run the container:
 
 ```bash
 docker run -d \
 -p 8088:8088 \
 -p 80:80 \
---secret jwt_secret=CECI_EST_UN_SECRET_SEEEEEEECRET \
+--secret jwt_secret=THIS_IS_A_SECRET_SEEEEEEECRET \
 -v $(pwd)/xor_c2.db:/app/xor_c2.db \
 --name c2-server \
 xor-c2-server
