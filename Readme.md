@@ -4,6 +4,10 @@
 
 This project demonstrates the core principles of a modern C2 framework with support for advanced anti-detection and obfuscation techniques.
 
+## Interface
+
+![XOR C2 Client](img/interface.png)
+
 ## Prerequisites
 
 - Rust (1.70+)
