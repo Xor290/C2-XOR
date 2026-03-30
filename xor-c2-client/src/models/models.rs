@@ -51,6 +51,10 @@ pub struct AgentConfig {
     pub use_sleep_obfuscation: u32,
     pub sleep_jitter_percent: f32,
     pub encrypt_memory_on_sleep: bool,
+    pub bypass_etw_amsi: bool,
+    pub enable_packing: bool,
+    pub packer_encryption: String,
+    pub packer_loader: String,
 }
 
 #[derive(Serialize)]
@@ -101,6 +105,10 @@ pub struct GenerateAgentDialog {
     pub use_sleep_obfuscation: u32,
     pub sleep_jitter_percent: f32,
     pub encrypt_memory_on_sleep: bool,
+    pub bypass_etw_amsi: bool,
+    pub enable_packing: bool,
+    pub packer_encryption: String,
+    pub packer_loader: String,
 }
 
 #[derive(Clone, Debug)]

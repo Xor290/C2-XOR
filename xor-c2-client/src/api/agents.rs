@@ -54,6 +54,10 @@ pub async fn generate_agent_with_config(
         use_sleep_obfuscation: config.use_sleep_obfuscation,
         sleep_jitter_percent: config.sleep_jitter_percent,
         encrypt_memory_on_sleep: config.encrypt_memory_on_sleep,
+        bypass_etw_amsi: config.bypass_etw_amsi,
+        enable_packing: config.enable_packing,
+        packer_encryption: config.packer_encryption.clone(),
+        packer_loader: config.packer_loader.clone(),
     };
 
     let payload = GenerateAgentRequest {

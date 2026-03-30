@@ -25,6 +25,10 @@ impl Default for GenerateAgentDialog {
             use_sleep_obfuscation: 5,
             sleep_jitter_percent: 0.20,
             encrypt_memory_on_sleep: true,
+            bypass_etw_amsi: false,
+            enable_packing: false,
+            packer_encryption: "aes".to_string(),
+            packer_loader: "nt_virtual_memory".to_string(),
         }
     }
 }

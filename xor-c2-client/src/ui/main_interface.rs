@@ -285,6 +285,89 @@ impl C2Client {
 
                 ui.add_space(10.0);
 
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.generate_dialog.bypass_etw_amsi, "Bypass AMSI + ETW (PAGE_GUARD/VEH)");
+                });
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.heading("Packer");
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.generate_dialog.enable_packing, "Enable Packer");
+                });
+
+                if self.generate_dialog.enable_packing {
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Encryption:");
+                        egui::ComboBox::from_id_source("packer_encryption")
+                            .selected_text(match self.generate_dialog.packer_encryption.as_str() {
+                                "aes"      => "AES-256-GCM",
+                                "chacha20" => "ChaCha20-Poly1305",
+                                "rc4"      => "RC4",
+                                "xor"      => "XOR",
+                                other      => other,
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_encryption,
+                                    "aes".to_string(),
+                                    "AES-256-GCM",
+                                );
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_encryption,
+                                    "chacha20".to_string(),
+                                    "ChaCha20-Poly1305",
+                                );
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_encryption,
+                                    "rc4".to_string(),
+                                    "RC4",
+                                );
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_encryption,
+                                    "xor".to_string(),
+                                    "XOR",
+                                );
+                            });
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Loader:");
+                        egui::ComboBox::from_id_source("packer_loader")
+                            .selected_text(match self.generate_dialog.packer_loader.as_str() {
+                                "nt_virtual_memory" => "NT Virtual Memory",
+                                "nt_section"        => "NT Section (Stealthy)",
+                                "classic"           => "Classic (VirtualAlloc)",
+                                other               => other,
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_loader,
+                                    "nt_virtual_memory".to_string(),
+                                    "NT Virtual Memory",
+                                );
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_loader,
+                                    "nt_section".to_string(),
+                                    "NT Section (Stealthy)",
+                                );
+                                ui.selectable_value(
+                                    &mut self.generate_dialog.packer_loader,
+                                    "classic".to_string(),
+                                    "Classic (VirtualAlloc)",
+                                );
+                            });
+                    });
+                }
+
+                ui.add_space(10.0);
+
                 if !self.generate_dialog.status_message.is_empty() {
                     let color = if self.generate_dialog.status_message.contains("Success")
                         || self.generate_dialog.status_message.contains("saved")
