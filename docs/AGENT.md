@@ -418,18 +418,25 @@ stateDiagram-v2
 - **Anti-VM** (si `ANTI_VM_ENABLED = true`)
   - 7 méthodes de détection
   - Termine silencieusement si VM détectée
-  
+
 - **Anti-Debug** (si `ANTI_DEBUG_ENABLED = true`)
   - Vérification `IsDebuggerPresent()`
   - Vérification du PEB (BeingDebugged flag)
   - Termine silencieusement si debugger détecté
 
-### 3. Préparation sleep obfuscation
+### 3. Installation du bypass AMSI + ETW (si `BYPASS_AMSI_ETW_ENABLED`)
+- Résolution dynamique de `AmsiScanBuffer` dans `amsi.dll`
+- Résolution dynamique de `EtwEventWrite` dans `ntdll.dll`
+- Pose de `PAGE_GUARD` sur les pages mémoire cibles
+- Enregistrement du VEH (`AddVectoredExceptionHandler`)
+- Toute tentative d'appel à ces fonctions lève un `STATUS_GUARD_PAGE_VIOLATION` intercepté avant exécution
+
+### 4. Préparation sleep obfuscation
 - Initialisation du `SleepObfuscator` (si `SLEEP_OBFUSCATION_ENABLED = true`)
 - Génération clé XOR 256-bit pour chiffrement mémoire
 - Création du thread pool Windows
 
-### 4. Collecte d'informations
+### 5. Collecte d'informations
 L'agent collecte automatiquement :
 - **hostname** : Nom de la machine
 - **username** : Utilisateur connecté (DOMAIN\user)
@@ -437,13 +444,13 @@ L'agent collecte automatiquement :
 - **process_name** : Nom du processus hôte
 - **os** : Version Windows
 
-### 5. Installation de la persistance
+### 6. Installation de la persistance
 - **Persistance automatique** (MITRE T1547.001)
 - Copie vers `%APPDATA%\Microsoft\Security\SecurityHealthService.exe`
 - Création clé Registry Run (user-level, pas admin requis)
 - Skippée si déjà installée
 
-### 6. Beacon (Check-in)
+### 7. Beacon (Check-in)
 Communication régulière avec le serveur :
 1. Envoi des informations système
 2. Réception des commandes en attente
@@ -797,6 +804,7 @@ agent/
 │   ├── debug_detection.cpp   # ⭐ Détection débogage (IsDebuggerPresent + PEB)
 │   ├── sleep_obfuscation.cpp # ⭐ Obfuscation sleep avec jitter + chiffrement mémoire
 │   ├── sleep_obfuscation.h
+│   ├── bypass_amsi_etw.h     # ⭐ Bypass AMSI + ETW via PAGE_GUARD + VEH
 │   ├── json.hpp              # Parser JSON (nlohmann)
 │   └── ReflectiveLoader/     # Génération shellcode
 │       └── DllLoaderShellcode/
@@ -807,6 +815,7 @@ agent/
 **Nouveautés** (⭐) :
 - `debug_detection.cpp` : Implémente deux méthodes anti-debug
 - `sleep_obfuscation.cpp/h` : Classe `SleepObfuscator` avec 3 stratégies de sleep
+- `bypass_amsi_etw.h` : Bypass AMSI + ETW via PAGE_GUARD et Vectored Exception Handler
 
 ---
 
@@ -952,6 +961,102 @@ void is_debugged() {
 - Apprentissage des mécanismes anti-forensics
 - Compréhension des protections malware
 - Analyse du comportement sous débogage
+
+---
+
+### Bypass AMSI + ETW (PAGE_GUARD + VEH)
+
+L'agent implémente un bypass de l'AMSI et de l'ETW sans modifier les octets des fonctions cibles. La technique repose sur deux mécanismes Windows : `PAGE_GUARD` et le **Vectored Exception Handler**.
+
+#### Cibles
+
+| Fonction | Module | Rôle |
+|----------|--------|------|
+| `AmsiScanBuffer` | `amsi.dll` | Scan des buffers par Windows Defender / EDR |
+| `EtwEventWrite` | `ntdll.dll` | Journalisation des événements ETW (télémétrie EDR) |
+
+#### Mécanisme PAGE_GUARD
+
+```
+Page mémoire de AmsiScanBuffer :
+  [PAGE_EXECUTE_READ]          ← état normal
+        ↓  VirtualProtect()
+  [PAGE_EXECUTE_READ | PAGE_GUARD]  ← état après bypass
+
+Toute tentative d'exécution/lecture de cette page lève :
+  STATUS_GUARD_PAGE_VIOLATION  ← intercepté par le VEH
+```
+
+`PAGE_GUARD` est un flag qui rend une page mémoire "piégée" : le premier accès lève une exception, puis le flag est **automatiquement retiré** par Windows. Le bypass le réinstalle après chaque déclenchement.
+
+#### Vectored Exception Handler (VEH)
+
+```cpp
+// Enregistrement du handler (priorité maximale)
+g_VehHandle = AddVectoredExceptionHandler(1, VehHandler);
+```
+
+Le VEH est appelé **avant** tout handler SEH, ce qui garantit l'interception même si le code appelant a ses propres handlers.
+
+#### Flux d'interception
+
+```mermaid
+sequenceDiagram
+    participant C as Code appelant
+    participant W as Windows Kernel
+    participant V as VehHandler
+    participant A as AmsiScanBuffer
+
+    C->>A: CALL AmsiScanBuffer
+    A->>W: Accès page PAGE_GUARD → EXCEPTION
+    W->>V: STATUS_GUARD_PAGE_VIOLATION
+    V->>V: Reconnaît l'adresse cible
+    V->>V: Écrit AMSI_RESULT_CLEAN dans *pResult (stack[6])
+    V->>V: ctx->Rip = adresse de retour (stack[0])
+    V->>V: ctx->Rax = S_OK
+    V->>V: EFlags |= TF (single-step pour réinstaller PAGE_GUARD)
+    V->>C: EXCEPTION_CONTINUE_EXECUTION (retour direct à l'appelant)
+    Note over A: AmsiScanBuffer n'est jamais exécutée
+```
+
+#### Gestion du single-step
+
+Après chaque interception, le VEH active le **Trap Flag** (`EFlags |= 0x100`). L'instruction suivante lève `STATUS_SINGLE_STEP`, ce qui permet de réinstaller `PAGE_GUARD` sur toutes les pages cibles via `ReprotectAll()`.
+
+```
+VEH déclenché (GUARD_PAGE)
+  → retourne directement à l'appelant
+  → TF activé
+  → prochaine instruction : STATUS_SINGLE_STEP
+  → VEH rappelé → ReprotectAll() → PAGE_GUARD réinstallé
+```
+
+#### Résolution dynamique des adresses
+
+Les noms des fonctions et DLLs sont construits caractère par caractère pour éviter les strings en clair dans le binaire :
+
+```cpp
+WCHAR wAmsi[]  = { L'a',L'm',L's',L'i',L'.',L'd',L'l',L'l',L'\0' };
+CHAR  cFunc[]  = { 'A','m','s','i','S','c','a','n','B','u','f','f','e','r','\0' };
+WCHAR wNtdll[] = { L'n',L'd',L'l',L'l',L'.',L'd',L'l',L'l',L'\0' };
+CHAR  cEtw[]   = { 'E','t','w','E','v','e','n','t','W','r','i','t','e','\0' };
+```
+
+#### Activation
+
+Le bypass est conditionnel à un flag de compilation :
+
+```bash
+x86_64-w64-mingw32-g++ -DBYPASS_AMSI_ETW_ENABLED -o agent.exe main_exe.cpp ...
+```
+
+Sans ce flag, le code de bypass est **complètement exclu** du binaire (pas de dead code, réduction de la surface de détection statique).
+
+#### Nettoyage
+
+À l'arrêt de l'agent (normal ou exception), le bypass est désinstallé :
+- `VirtualProtect` restaure `PAGE_EXECUTE_READ` sur chaque page
+- `RemoveVectoredExceptionHandler` désenregistre le VEH
 
 ---
 

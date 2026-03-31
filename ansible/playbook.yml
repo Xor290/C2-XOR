@@ -7,6 +7,7 @@
       project_dir: /opt/xor-c2
       server_user: c2admin
       server_port: 8088
+      link: http://192.168.1.94
 
   tasks:
       - name: Mise à jour des paquets
@@ -50,7 +51,7 @@
         ufw:
             state: enabled
 
-      - name: Ouvrir ports 80 et 443
+      - name: Ouvrir ports nécessaires
         ufw:
             rule: allow
             port: "{{ item }}"
@@ -59,6 +60,8 @@
             - 80
             - 443
             - 8080
+            - 8443
+            - 8088
 
       - name: Affichage du résultat de compilation
         debug:
@@ -114,7 +117,7 @@
 
       - name: Test de connectivité
         uri:
-            url: "http://192.168.1.94:{{ server_port }}/health"
+            url: "{{ link }}:{{ server_port }}/health"
             method: GET
             status_code: [200, 404]
         ignore_errors: true

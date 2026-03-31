@@ -6,7 +6,9 @@ This project demonstrates the core principles of a modern C2 framework with supp
 
 ## Interface
 
-![XOR C2 Client](img/interface.png)
+<p align="center">
+  <img src="img/interface.png" alt="XOR C2 Client Interface" width="100%">
+</p>
 
 ## Prerequisites
 
@@ -25,6 +27,12 @@ cd ../c2-xor-server
 cargo build --release
 ```
 
+## Packer Configuration
+```bash
+cargo build --release -p packer-cli
+cargo build -p stub --release --target x86_64-pc-windows-gnu
+```
+
 ## Getting Started
 
 ### 1. Start the server
@@ -32,7 +40,6 @@ cargo build --release
 ```bash
 cd c2-xor-server
 cargo run
-# Or with the binary
 ./target/release/xor-c2-server
 ```
 

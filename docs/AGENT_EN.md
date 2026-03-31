@@ -424,12 +424,19 @@ stateDiagram-v2
   - PEB check (BeingDebugged flag)
   - Terminates silently if debugger detected
 
-### 3. Sleep obfuscation preparation
+### 3. AMSI + ETW bypass installation (if `BYPASS_AMSI_ETW_ENABLED`)
+- Dynamic resolution of `AmsiScanBuffer` in `amsi.dll`
+- Dynamic resolution of `EtwEventWrite` in `ntdll.dll`
+- Sets `PAGE_GUARD` on target memory pages
+- Registers VEH (`AddVectoredExceptionHandler`)
+- Any call attempt to these functions raises `STATUS_GUARD_PAGE_VIOLATION`, intercepted before execution
+
+### 4. Sleep obfuscation preparation
 - Initialization of `SleepObfuscator` (if `SLEEP_OBFUSCATION_ENABLED = true`)
 - Generation of 256-bit XOR key for memory encryption
 - Creation of Windows thread pool
 
-### 4. Information collection
+### 5. Information collection
 The agent automatically collects:
 - **hostname**: Machine name
 - **username**: Logged-in user (DOMAIN\user)
@@ -437,13 +444,13 @@ The agent automatically collects:
 - **process_name**: Host process name
 - **os**: Windows version
 
-### 5. Persistence installation
+### 6. Persistence installation
 - **Automatic persistence** (MITRE T1547.001)
 - Copies to `%APPDATA%\Microsoft\Security\SecurityHealthService.exe`
 - Creates Registry Run key (user-level, no admin required)
 - Skipped if already installed
 
-### 6. Beacon (Check-in)
+### 7. Beacon (Check-in)
 Regular communication with the server:
 1. Sending system information
 2. Receiving pending commands
@@ -797,6 +804,7 @@ agent/
 │   ├── debug_detection.cpp   # ⭐ Debug detection (IsDebuggerPresent + PEB)
 │   ├── sleep_obfuscation.cpp # ⭐ Sleep obfuscation with jitter + memory encryption
 │   ├── sleep_obfuscation.h
+│   ├── bypass_amsi_etw.h     # ⭐ AMSI + ETW bypass via PAGE_GUARD + VEH
 │   ├── json.hpp              # JSON parser (nlohmann)
 │   └── ReflectiveLoader/     # Shellcode generation
 │       └── DllLoaderShellcode/
@@ -807,6 +815,7 @@ agent/
 **New additions** (⭐):
 - `debug_detection.cpp`: Implements two anti-debug methods
 - `sleep_obfuscation.cpp/h`: `SleepObfuscator` class with 3 sleep strategies
+- `bypass_amsi_etw.h`: AMSI + ETW bypass via PAGE_GUARD and Vectored Exception Handler
 
 ---
 
@@ -952,6 +961,102 @@ void is_debugged() {
 - Learning anti-forensics mechanisms
 - Understanding malware protections
 - Analyzing behavior under debugging
+
+---
+
+### AMSI + ETW Bypass (PAGE_GUARD + VEH)
+
+The agent implements an AMSI and ETW bypass without patching the target functions' bytes. The technique relies on two Windows mechanisms: `PAGE_GUARD` and the **Vectored Exception Handler**.
+
+#### Targets
+
+| Function | Module | Role |
+|----------|--------|------|
+| `AmsiScanBuffer` | `amsi.dll` | Buffer scanning by Windows Defender / EDR |
+| `EtwEventWrite` | `ntdll.dll` | ETW event logging (EDR telemetry) |
+
+#### PAGE_GUARD Mechanism
+
+```
+AmsiScanBuffer memory page:
+  [PAGE_EXECUTE_READ]               ← normal state
+        ↓  VirtualProtect()
+  [PAGE_EXECUTE_READ | PAGE_GUARD]  ← state after bypass
+
+Any execution/read attempt on this page raises:
+  STATUS_GUARD_PAGE_VIOLATION  ← intercepted by VEH
+```
+
+`PAGE_GUARD` is a flag that "traps" a memory page: the first access raises an exception, then the flag is **automatically removed** by Windows. The bypass reinstalls it after each trigger.
+
+#### Vectored Exception Handler (VEH)
+
+```cpp
+// Register handler (maximum priority)
+g_VehHandle = AddVectoredExceptionHandler(1, VehHandler);
+```
+
+The VEH is called **before** any SEH handler, guaranteeing interception even if the calling code has its own handlers.
+
+#### Interception Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Calling code
+    participant W as Windows Kernel
+    participant V as VehHandler
+    participant A as AmsiScanBuffer
+
+    C->>A: CALL AmsiScanBuffer
+    A->>W: PAGE_GUARD page access → EXCEPTION
+    W->>V: STATUS_GUARD_PAGE_VIOLATION
+    V->>V: Recognizes target address
+    V->>V: Writes AMSI_RESULT_CLEAN to *pResult (stack[6])
+    V->>V: ctx->Rip = return address (stack[0])
+    V->>V: ctx->Rax = S_OK
+    V->>V: EFlags |= TF (single-step to reinstall PAGE_GUARD)
+    V->>C: EXCEPTION_CONTINUE_EXECUTION (returns directly to caller)
+    Note over A: AmsiScanBuffer is never executed
+```
+
+#### Single-step Management
+
+After each interception, the VEH enables the **Trap Flag** (`EFlags |= 0x100`). The next instruction raises `STATUS_SINGLE_STEP`, allowing `PAGE_GUARD` to be reinstalled on all target pages via `ReprotectAll()`.
+
+```
+VEH triggered (GUARD_PAGE)
+  → returns directly to caller
+  → TF enabled
+  → next instruction: STATUS_SINGLE_STEP
+  → VEH called again → ReprotectAll() → PAGE_GUARD reinstalled
+```
+
+#### Dynamic Address Resolution
+
+Function and DLL names are built character by character to avoid plaintext strings in the binary:
+
+```cpp
+WCHAR wAmsi[]  = { L'a',L'm',L's',L'i',L'.',L'd',L'l',L'l',L'\0' };
+CHAR  cFunc[]  = { 'A','m','s','i','S','c','a','n','B','u','f','f','e','r','\0' };
+WCHAR wNtdll[] = { L'n',L'd',L'l',L'l',L'.',L'd',L'l',L'l',L'\0' };
+CHAR  cEtw[]   = { 'E','t','w','E','v','e','n','t','W','r','i','t','e','\0' };
+```
+
+#### Activation
+
+The bypass is conditional on a compilation flag:
+
+```bash
+x86_64-w64-mingw32-g++ -DBYPASS_AMSI_ETW_ENABLED -o agent.exe main_exe.cpp ...
+```
+
+Without this flag, the bypass code is **completely excluded** from the binary (no dead code, reduced static detection surface).
+
+#### Cleanup
+
+On agent shutdown (normal or exception), the bypass is uninstalled:
+- `VirtualProtect` restores `PAGE_EXECUTE_READ` on each page
+- `RemoveVectoredExceptionHandler` unregisters the VEH
 
 ---
 
