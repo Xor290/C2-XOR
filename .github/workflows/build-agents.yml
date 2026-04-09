@@ -36,7 +36,7 @@ jobs:
               run: pip install pefile
 
             - name: Create test config.h
-              working-directory: agent/http
+              working-directory: agents/windows/http
               run: |
                   cat > config.h << 'EOF'
                   #ifndef CONFIG_H
@@ -56,7 +56,7 @@ jobs:
                   EOF
 
             - name: Build EXE agent
-              working-directory: agent/http
+              working-directory: agents/windows/http
               run: |
                   x86_64-w64-mingw32-g++ \
                     -o agent.exe \
@@ -72,7 +72,7 @@ jobs:
                     -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 
             - name: Build DLL agent
-              working-directory: agent/http
+              working-directory: agents/windows/http
               run: |
                   x86_64-w64-mingw32-g++ \
                     -shared \
@@ -89,14 +89,14 @@ jobs:
                     -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32
 
             - name: Generate Shellcode
-              working-directory: agent/http/ReflectiveLoader
+              working-directory: agents/windows/http/ReflectiveLoader
               run: |
                   cp ../agent.dll .
                   python shellcodize.py agent.dll
                   mv shellcode.bin ../
 
             - name: Verify build artifacts
-              working-directory: agent/http
+              working-directory: agents/windows/http
               run: |
                   echo "=== Build Artifacts ==="
                   ls -lh agent.exe agent.dll shellcode.bin
@@ -107,21 +107,21 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: agent-exe
-                  path: agent/http/agent.exe
+                  path: agents/windows/http/agent.exe
                   retention-days: 7
 
             - name: Upload DLL artifact
               uses: actions/upload-artifact@v4
               with:
                   name: agent-dll
-                  path: agent/http/agent.dll
+                  path: agents/windows/http/agent.dll
                   retention-days: 7
 
             - name: Upload Shellcode artifact
               uses: actions/upload-artifact@v4
               with:
                   name: agent-shellcode
-                  path: agent/http/shellcode.bin
+                  path: agents/windows/http/shellcode.bin
                   retention-days: 7
 
             - name: Upload all artifacts (bundle)
@@ -129,9 +129,9 @@ jobs:
               with:
                   name: agents-bundle
                   path: |
-                      agent/http/agent.exe
-                      agent/http/agent.dll
-                      agent/http/shellcode.bin
+                      agents/windows/http/agent.exe
+                      agents/windows/http/agent.dll
+                      agents/windows/http/shellcode.bin
                   retention-days: 7
 
     antivirus-scan:
