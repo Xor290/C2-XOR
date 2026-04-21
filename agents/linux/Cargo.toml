@@ -1,0 +1,21 @@
+[package]
+name = "xor-agent-linux"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[dependencies]
+ureq      = { version = "2.9", features = ["tls"] }
+base64    = "0.22"
+uuid      = { version = "1.6", features = ["v4"] }
+libc      = "0.2"
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
