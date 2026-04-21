@@ -19,6 +19,19 @@ impl C2Client {
                 self.generate_dialog.user_agent = "Mozilla/5.0".to_string();
                 self.generate_dialog.uri_path = "/api/update".to_string();
             }
+            "linux" => {
+                self.generate_dialog.host = "localhost".to_string();
+                self.generate_dialog.port = 8088;
+                self.generate_dialog.user_agent = "Mozilla/5.0".to_string();
+                self.generate_dialog.uri_path = "/api/update".to_string();
+                self.generate_dialog.beacon_interval = 5;
+                self.generate_dialog.anti_vm = false;
+                self.generate_dialog.anti_debug = false;
+                self.generate_dialog.use_sleep_obfuscation = 0;
+                self.generate_dialog.encrypt_memory_on_sleep = false;
+                self.generate_dialog.bypass_etw_amsi = false;
+                self.generate_dialog.enable_packing = false;
+            }
             _ => {
                 self.generate_dialog.host = "localhost".to_string();
                 self.generate_dialog.port = 8088;
@@ -209,7 +222,13 @@ impl C2Client {
                 ui.horizontal(|ui| {
                     ui.label("Payload Type:");
                     egui::ComboBox::from_label("")
-                        .selected_text(&self.generate_dialog.payload_type)
+                        .selected_text(match self.generate_dialog.payload_type.as_str() {
+                            "exe"       => "Windows EXE",
+                            "dll"       => "Windows DLL",
+                            "shellcode" => "Shellcode",
+                            "linux"     => "Linux ELF",
+                            other       => other,
+                        })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.generate_dialog.payload_type,
@@ -226,12 +245,19 @@ impl C2Client {
                                 "shellcode".to_string(),
                                 "Shellcode",
                             );
+                            ui.separator();
+                            ui.selectable_value(
+                                &mut self.generate_dialog.payload_type,
+                                "linux".to_string(),
+                                "Linux ELF",
+                            );
                         });
                 });
 
-                ui.add_space(10.0);
+                let is_linux = self.generate_dialog.payload_type == "linux";
 
-                ui.heading("Advanced Configuration");
+                ui.add_space(10.0);
+                ui.heading("Configuration");
                 ui.separator();
 
                 ui.horizontal(|ui| {
@@ -243,127 +269,136 @@ impl C2Client {
                     );
                 });
 
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.generate_dialog.anti_vm, "Anti-VM");
-                });
-
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.generate_dialog.anti_debug, "Anti-Debug");
-                });
-
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Use Sleep Obfuscation:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.generate_dialog.use_sleep_obfuscation)
-                            .clamp_range(0..=100)
-                            .speed(1),
-                    );
-                });
-
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.generate_dialog.encrypt_memory_on_sleep,
-                        "Encrypt Memory on Sleep",
-                    );
-                });
-
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Sleep Jitter Percent:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.generate_dialog.sleep_jitter_percent)
-                            .clamp_range(0.0..=100.0),
-                    );
-                });
-
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.generate_dialog.bypass_etw_amsi, "Bypass AMSI + ETW (PAGE_GUARD/VEH)");
-                });
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.heading("Packer");
-                ui.add_space(5.0);
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.generate_dialog.enable_packing, "Enable Packer");
-                });
-
-                if self.generate_dialog.enable_packing {
-                    ui.add_space(5.0);
+                if !is_linux {
+                    ui.add_space(10.0);
+                    ui.heading("Windows Options");
+                    ui.separator();
 
                     ui.horizontal(|ui| {
-                        ui.label("Encryption:");
-                        egui::ComboBox::from_id_source("packer_encryption")
-                            .selected_text(match self.generate_dialog.packer_encryption.as_str() {
-                                "aes"      => "AES-256-GCM",
-                                "chacha20" => "ChaCha20-Poly1305",
-                                "rc4"      => "RC4",
-                                "xor"      => "XOR",
-                                other      => other,
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_encryption,
-                                    "aes".to_string(),
-                                    "AES-256-GCM",
-                                );
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_encryption,
-                                    "chacha20".to_string(),
-                                    "ChaCha20-Poly1305",
-                                );
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_encryption,
-                                    "rc4".to_string(),
-                                    "RC4",
-                                );
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_encryption,
-                                    "xor".to_string(),
-                                    "XOR",
-                                );
-                            });
+                        ui.checkbox(&mut self.generate_dialog.anti_vm, "Anti-VM");
                     });
 
                     ui.add_space(5.0);
 
                     ui.horizontal(|ui| {
-                        ui.label("Loader:");
-                        egui::ComboBox::from_id_source("packer_loader")
-                            .selected_text(match self.generate_dialog.packer_loader.as_str() {
-                                "nt_virtual_memory" => "NT Virtual Memory",
-                                "nt_section"        => "NT Section (Stealthy)",
-                                "classic"           => "Classic (VirtualAlloc)",
-                                other               => other,
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_loader,
-                                    "nt_virtual_memory".to_string(),
-                                    "NT Virtual Memory",
-                                );
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_loader,
-                                    "nt_section".to_string(),
-                                    "NT Section (Stealthy)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.generate_dialog.packer_loader,
-                                    "classic".to_string(),
-                                    "Classic (VirtualAlloc)",
-                                );
-                            });
+                        ui.checkbox(&mut self.generate_dialog.anti_debug, "Anti-Debug");
                     });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Sleep Obfuscation:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.generate_dialog.use_sleep_obfuscation)
+                                .clamp_range(0..=100)
+                                .speed(1),
+                        );
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.generate_dialog.encrypt_memory_on_sleep,
+                            "Encrypt Memory on Sleep",
+                        );
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Sleep Jitter (%):");
+                        ui.add(
+                            egui::DragValue::new(&mut self.generate_dialog.sleep_jitter_percent)
+                                .clamp_range(0.0..=100.0),
+                        );
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.generate_dialog.bypass_etw_amsi,
+                            "Bypass AMSI + ETW (PAGE_GUARD/VEH)",
+                        );
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.heading("Packer");
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.generate_dialog.enable_packing, "Enable Packer");
+                    });
+
+                    if self.generate_dialog.enable_packing {
+                        ui.add_space(5.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Encryption:");
+                            egui::ComboBox::from_id_source("packer_encryption")
+                                .selected_text(match self.generate_dialog.packer_encryption.as_str() {
+                                    "aes"      => "AES-256-GCM",
+                                    "chacha20" => "ChaCha20-Poly1305",
+                                    "rc4"      => "RC4",
+                                    "xor"      => "XOR",
+                                    other      => other,
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_encryption,
+                                        "aes".to_string(),
+                                        "AES-256-GCM",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_encryption,
+                                        "chacha20".to_string(),
+                                        "ChaCha20-Poly1305",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_encryption,
+                                        "rc4".to_string(),
+                                        "RC4",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_encryption,
+                                        "xor".to_string(),
+                                        "XOR",
+                                    );
+                                });
+                        });
+
+                        ui.add_space(5.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Loader:");
+                            egui::ComboBox::from_id_source("packer_loader")
+                                .selected_text(match self.generate_dialog.packer_loader.as_str() {
+                                    "nt_virtual_memory" => "NT Virtual Memory",
+                                    "nt_section"        => "NT Section (Stealthy)",
+                                    "classic"           => "Classic (VirtualAlloc)",
+                                    other               => other,
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_loader,
+                                        "nt_virtual_memory".to_string(),
+                                        "NT Virtual Memory",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_loader,
+                                        "nt_section".to_string(),
+                                        "NT Section (Stealthy)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.generate_dialog.packer_loader,
+                                        "classic".to_string(),
+                                        "Classic (VirtualAlloc)",
+                                    );
+                                });
+                        });
+                    }
                 }
 
                 ui.add_space(10.0);
@@ -480,6 +515,11 @@ impl C2Client {
                     }
                     if ui.button("Shellcode").clicked() {
                         self.open_agent_generator("shellcode");
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Linux ELF").clicked() {
+                        self.open_agent_generator("linux");
                         ui.close_menu();
                     }
                 });

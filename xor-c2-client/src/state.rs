@@ -116,6 +116,7 @@ pub fn get_file_extension(payload_type: &str) -> &str {
         "exe" => "exe",
         "dll" => "dll",
         "shellcode" => "bin",
+        "linux" => "elf",
         _ => "bin",
     }
 }

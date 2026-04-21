@@ -18,7 +18,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 
 // ============================================================================
@@ -373,7 +373,15 @@ pub async fn start(profile: ListenerProfile, agent_handler: AgentHandler, databa
     let addr = SocketAddr::from(([0, 0, 0, 0], profile.port));
     log::info!("[+] HTTP Listener '{}' starting on {}", profile.name, addr);
 
-    if let Err(e) = Server::bind(&addr).serve(app.into_make_service()).await {
+    let tcp = match TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("[!] HTTP Listener '{}' failed to bind to {}: {}", profile.name, addr, e);
+            return;
+        }
+    };
+
+    if let Err(e) = Server::from_tcp(tcp).unwrap().serve(app.into_make_service()).await {
         log::error!("[!] HTTP Listener error: {}", e);
     }
 }

