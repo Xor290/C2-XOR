@@ -40,6 +40,17 @@ flowchart TB
 
 ## Payload Types
 
+### 0. Linux ELF
+Static Linux binary (musl) written in Rust
+
+| Characteristic | Value |
+|----------------|-------|
+| Format | ELF64 (x86_64) |
+| Compiler | Rust (cargo + musl-tools) |
+| Dependencies | None (fully static) |
+| Configuration | Environment variables at build time |
+| Communication | HTTP/HTTPS via `ureq` |
+
 ### 1. Windows EXE
 Standard Windows executable (.exe)
 
@@ -775,12 +786,47 @@ std::string xor_encrypt(const std::string& data, const std::string& key) {
 
 ---
 
+## Linux Agent Configuration
+
+The Linux agent is configured via environment variables at build time (injected into `src/config.rs` via `build.rs`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `XOR_KEY` | XOR encryption key | `mysupersecretkey` |
+| `XOR_SERVER` | C2 IP address / domain | `127.0.0.1` |
+| `XOR_PORT` | Listener port | `8088` |
+| `RESULTS_PATH` | Beacon URI path | `/api/update` |
+| `RESULT_PATH` | Results URI path | `/api/result` |
+| `USER_AGENT` | HTTP User-Agent | `Mozilla/5.0` |
+| `HEADER` | Custom HTTP header (`Name: value`) | `Accept: */*` |
+| `BEACON_INTERVAL` | Beacon interval (seconds) | `5` |
+| `USE_HTTPS` | Enable HTTPS | `false` |
+
+**Build**:
+```bash
+XOR_KEY=Kj#9xL XOR_SERVER=c2.example.com XOR_PORT=443 USE_HTTPS=true \
+  cargo build --release --target x86_64-unknown-linux-musl
+```
+
+The produced binary is fully static (musl), with no system dependencies.
+
+---
+
 ## Agent File Structure
 
 ```
-agent/
-├── http/
-│   ├── main_exe.cpp          # EXE entry point (standalone)
+agents/linux/
+├── build.rs              # Config injection via env vars
+├── Cargo.toml
+└── src/
+    ├── main.rs           # Entry point, beacon loop
+    ├── crypt.rs          # XOR encryption
+    ├── http.rs           # HTTP/HTTPS communication (ureq)
+    ├── sysinfo.rs        # System information collection
+    └── task.rs           # Task manager
+
+agents/windows/http/
+├── main_exe.cpp          # EXE entry point (standalone)
 │   ├── main_dll.cpp          # DLL entry point (injection)
 │   ├── main_svc.cpp          # Windows Service entry point
 │   ├── config.h              # Configuration (dynamically generated)

@@ -7,7 +7,7 @@
       project_dir: /opt/xor-c2
       server_user: c2admin
       server_port: 8088
-      link: http://192.168.1.94
+      link: http://98.84.11.231
 
   tasks:
       - name: Mise à jour des paquets
@@ -32,12 +32,43 @@
         args:
             creates: "{{ project_dir }}/.cargo/bin/rustc"
 
+      - name: Création de l'utilisateur c2admin
+        user:
+            name: "{{ server_user }}"
+            system: yes
+            shell: /bin/false
+            create_home: no
+
+      - name: Create project directory
+        file:
+            path: "{{ project_dir }}"
+            state: directory
+            mode: "0755"
+        tags: project
+
       - name: Copie des sources du serveur
         synchronize:
-            src: "{{ playbook_dir }}/../xor-c2-server/"
+            src: ../xor-c2-server/
             dest: "{{ project_dir }}/xor-c2-server"
             rsync_opts:
                 - "--exclude=target"
+        tags: server
+
+      - name: Copie agent windows
+        synchronize:
+            src: ../agent/
+            dest: "{{ project_dir }}/agent"
+            rsync_opts:
+                - "--exclude=target"
+        tags: agent
+
+      - name: Copie Packer
+        synchronize:
+            src: ../packer/
+            dest: "{{ project_dir }}/packer"
+            rsync_opts:
+                - "--exclude=target"
+        tags: packer
 
       - name: Compilation du serveur
         shell: |
@@ -46,10 +77,33 @@
             cargo build --release
         args:
             executable: /bin/bash
+        tags: compile
 
-      - name: Enable firewall
-        ufw:
-            state: enabled
+      - name: Installation target Windows Rust
+        shell: |
+            source $HOME/.cargo/env
+            rustup target add x86_64-pc-windows-gnu
+        args:
+            executable: /bin/bash
+        tags: compile
+
+      - name: Compilation du packer
+        shell: |
+            source $HOME/.cargo/env
+            cd {{ project_dir }}/packer
+            cargo build --release -p packer-cli
+            cargo build -p stub --release --target x86_64-pc-windows-gnu
+        args:
+            executable: /bin/bash
+        tags: compile
+
+      - name: Corrige les permissions du répertoire
+        ansible.builtin.file:
+            path: "{{ project_dir }}"
+            owner: "{{ server_user }}"
+            group: "{{ server_user }}"
+            mode: "0755"
+        tags: law
 
       - name: Ouvrir ports nécessaires
         ufw:
@@ -57,11 +111,15 @@
             port: "{{ item }}"
             proto: tcp
         loop:
+            - 22
             - 80
             - 443
-            - 8080
             - 8443
             - 8088
+
+      - name: Enable firewall
+        ufw:
+            state: enabled
 
       - name: Affichage du résultat de compilation
         debug:
@@ -98,31 +156,3 @@
             enabled: yes
             state: started
             daemon_reload: yes
-
-- name: Vérification du déploiement
-  hosts: vm-deploy
-  become: true
-  vars:
-      server_port: 8088
-
-  tasks:
-      - name: Vérification du service
-        systemd:
-            name: xor-c2-server
-        register: service_status
-
-      - name: Affichage du statut
-        debug:
-            msg: "Serveur C2 : {{ service_status.status.ActiveState }}"
-
-      - name: Test de connectivité
-        uri:
-            url: "{{ link }}:{{ server_port }}/health"
-            method: GET
-            status_code: [200, 404]
-        ignore_errors: true
-        register: health_check
-
-      - name: Résultat
-        debug:
-            msg: "Health check: {{ 'Accessible' if health_check.status in [200, 404] else 'Non accessible' }}"

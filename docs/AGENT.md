@@ -40,6 +40,17 @@ flowchart TB
 
 ## Types de Payload
 
+### 0. Linux ELF
+Binaire Linux statique (musl) écrit en Rust
+
+| Caractéristique | Valeur |
+|-----------------|--------|
+| Format | ELF64 (x86_64) |
+| Compilateur | Rust (cargo + musl-tools) |
+| Dépendances | Aucune (statique) |
+| Configuration | Variables d'environnement au build |
+| Communication | HTTP/HTTPS via `ureq` |
+
 ### 1. Windows EXE
 Exécutable Windows standard (.exe)
 
@@ -775,12 +786,47 @@ std::string xor_encrypt(const std::string& data, const std::string& key) {
 
 ---
 
+## Configuration de l'Agent Linux
+
+L'agent Linux se configure via des variables d'environnement au moment du build (injectées dans `src/config.rs` via `build.rs`) :
+
+| Variable | Description | Défaut |
+|----------|-------------|--------|
+| `XOR_KEY` | Clé de chiffrement XOR | `mysupersecretkey` |
+| `XOR_SERVER` | Adresse IP / domaine du C2 | `127.0.0.1` |
+| `XOR_PORT` | Port du listener | `8088` |
+| `RESULTS_PATH` | Chemin URI beacon | `/api/update` |
+| `RESULT_PATH` | Chemin URI résultats | `/api/result` |
+| `USER_AGENT` | User-Agent HTTP | `Mozilla/5.0` |
+| `HEADER` | Header HTTP custom (`Nom: valeur`) | `Accept: */*` |
+| `BEACON_INTERVAL` | Intervalle beacon (secondes) | `5` |
+| `USE_HTTPS` | Activer HTTPS | `false` |
+
+**Build** :
+```bash
+XOR_KEY=Kj#9xL XOR_SERVER=c2.example.com XOR_PORT=443 USE_HTTPS=true \
+  cargo build --release --target x86_64-unknown-linux-musl
+```
+
+Le binaire produit est entièrement statique (musl), sans dépendances système.
+
+---
+
 ## Structure des Fichiers Agent
 
 ```
-agent/
-├── http/
-│   ├── main_exe.cpp          # Point d'entrée EXE (standalone)
+agents/linux/
+├── build.rs              # Injection de la config via env vars
+├── Cargo.toml
+└── src/
+    ├── main.rs           # Point d'entrée, boucle beacon
+    ├── crypt.rs          # Chiffrement XOR
+    ├── http.rs           # Communication HTTP/HTTPS (ureq)
+    ├── sysinfo.rs        # Collecte d'informations système
+    └── task.rs           # Gestionnaire de tâches
+
+agents/windows/http/
+├── main_exe.cpp          # Point d'entrée EXE (standalone)
 │   ├── main_dll.cpp          # Point d'entrée DLL (injection)
 │   ├── main_svc.cpp          # Point d'entrée Service Windows
 │   ├── config.h              # Configuration (généré dynamiquement)
